@@ -4,7 +4,7 @@ A simple, interactive snap for initializing and unsealing Juju-deployed Vault cl
 
 ## Overview
 
-`un-seal` is a command-line tool that solves the "Day 0" problem for [Vault](https://www.vaultproject.io/) clusters deployed with [Juju](https://juju.is/). It automates the entire process of initialization, key management, and unsealing, handling the two primary scenarios you'll face:
+`un-seal` is a command-line tool that solves the "Day 0" problem for [Vault](https://charmhub.io/vault) clusters deployed with [Juju](https://juju.is/). It automates the entire process of initialization, key management, and unsealing, handling the two primary scenarios you'll face:
 
 1.  **Brand-New Cluster:** If you've just deployed Vault, `un-seal` will initialize the cluster, securely save the new keys and root token to your home directory, and then unseal all units.
 
@@ -65,7 +65,7 @@ The `un-seal` snap bundles the following tools, so you don't need to install the
     This snap must be installed with `--classic` confinement to access your host `juju` command.
     ```bash
     # The version/arch may differ
-    sudo snap install ./vault-unseal_8.1_amd64.snap --classic
+    sudo snap install ./un-seal_8.1_amd64.snap --classic
     ```
     
 ## Usage
