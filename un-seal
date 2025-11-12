@@ -2,7 +2,7 @@
 
 # ---
 # un-seal: A helper script to initialize or unseal a Juju-deployed Vault application.
-# version: 8.1
+# version: 1.0.0
 #
 # This script automatically finds the Juju leader unit for the Vault
 # application.
@@ -37,6 +37,20 @@ APP_NAME="vault" # Default Juju application name
 TIMEOUT_MINUTES=10 # Default timeout for unit initialization
 INIT_WAIT_SLEEP=30 # 30 second poll interval
 
+# --- Colors ---
+# Check if stderr is a TTY
+if [ -t 2 ]; then
+    RED='\033[0;31m'
+    YELLOW='\033[0;33m'
+    GREEN='\033[0;32m'
+    NC='\033[0m' # No Color
+else
+    RED=''
+    YELLOW=''
+    GREEN=''
+    NC=''
+fi
+
 # --- Helper Functions ---
 
 # Function to display help message
@@ -45,7 +59,7 @@ show_help() {
 Usage: $(basename "$0") [options]
 Version: $SNAP_VERSION
 
-Initializes or unseals the Juju-deployed HashiCorp Vault application.
+Initializes or unseals the Juju-deployed Vault application.
 This script is interactive. If Vault is already initialized, it will
 prompt for the existing unseal keys and root token.
 
@@ -57,20 +71,65 @@ Options:
   -a, --app-name <name>     The name of the Juju Vault application (default: "vault").
   -s, --key-shares <num>    The number of key shares to generate (default: 3).
   -t, --key-threshold <num> The number of keys required to unseal (default: 2).
-  -T, --timeout <mins>      The timeout in minutes to wait for follower units to initialize (default: 10).
+  -T, --timeout <mins>      The timeout in minutes to wait for units to initialize (default: 10).
   -h, --help                Show this help message.
 
 Example:
-  # Initialize 'vault' app with 3 shares, requiring 2 to unseal
-  $(basename "$0") --app-name vault -s 3 -t 2
+  # Initialize 'vault-ha' app with 3 shares, requiring 2 to unseal
+  $(basename "$0") --app-name vault-ha -s 3 -t 2
 EOF
 }
 
-# Cleanup function to remove temporary files
+# Cleanup function to remove temporary files [UNUSED]
 cleanup() {
     if [ -n "${VAULT_CERT_FILE:-}" ] && [ -f "$VAULT_CERT_FILE" ]; then
         rm -f "$VAULT_CERT_FILE"
         echo "  Temporary CA file '$VAULT_CERT_FILE' removed."
+    fi
+}
+
+# Function to check script parameters for validity
+check_params() {
+    local int_regex='^[0-9]+$'
+    local error_found=0
+
+    # 1. Check APP_NAME
+    if [ -z "$APP_NAME" ]; then
+        echo "${YELLOW}Error:${NC}: Application name (--app-name) cannot be empty." >&2
+        error_found=1
+    fi
+
+    # 2. Check KEY_SHARES
+    if ! [[ "$KEY_SHARES" =~ $int_regex ]] || [ "$KEY_SHARES" -lt 1 ]; then
+        echo "${YELLOW}Error:${NC}: Key shares (--key-shares) must be an integer >= 1. (Got: '$KEY_SHARES')" >&2
+        error_found=1
+    fi
+
+    # 3. Check KEY_THRESHOLD
+    if ! [[ "$KEY_THRESHOLD" =~ $int_regex ]] || [ "$KEY_THRESHOLD" -lt 1 ]; then
+        echo "${YELLOW}Error:${NC}: Key threshold (--key-threshold) must be an integer >= 1. (Got: '$KEY_THRESHOLD')" >&2
+        error_found=1
+    fi
+
+    # 4. Check relationship between SHARES and THRESHOLD
+    # Only check this if both values were valid integers
+    if [[ "$KEY_SHARES" =~ $int_regex ]] && [[ "$KEY_THRESHOLD" =~ $int_regex ]]; then
+        if [ "$KEY_THRESHOLD" -gt "$KEY_SHARES" ]; then
+            echo "${YELLOW}Error:${NC}: Key threshold ($KEY_THRESHOLD) cannot be greater than key shares ($KEY_SHARES)." >&2
+            error_found=1
+        fi
+    fi
+
+    # 5. Check TIMEOUT_MINUTES
+    if ! [[ "$TIMEOUT_MINUTES" =~ $int_regex ]] || [ "$TIMEOUT_MINUTES" -lt 1 ]; then
+        echo "${YELLOW}Error:${NC}: Timeout (--timeout) must be an integer in minutes >= 1. (Got: '$TIMEOUT_MINUTES')" >&2
+        error_found=1
+    fi
+    
+    if [ "$error_found" -eq 1 ]; then
+        echo ""
+        show_help
+        exit 1
     fi
 }
 
@@ -81,17 +140,17 @@ check_deps() {
     echo "  Checking dependencies..."
 
     if ! juju --version > /dev/null 2>&1; then
-        echo "Error: 'juju' command not found or not functional." >&2
+        echo "${RED}Error:${NC}: 'juju' command not found or not functional." >&2
         missing_deps=1
     fi
     
     if ! jq --version > /dev/null 2>&1; then
-        echo "Error: 'jq' command not found or not functional (check for library errors)." >&2
+        echo "${RED}Error:${NC}: 'jq' command not found or not functional (check for library errors)." >&2
         missing_deps=1
     fi
     
     if ! vault -version > /dev/null 2>&1; then
-        echo "Error: 'vault' command not found or not functional." >&2
+        echo "${RED}Error:${NC}: 'vault' command not found or not functional." >&2
         missing_deps=1
     fi
 
@@ -103,7 +162,7 @@ check_deps() {
     # Verify the application name exists in Juju
     echo "  Verifying Juju application '$APP_NAME' exists..."
     if ! juju status "$APP_NAME" > /dev/null 2>&1; then
-        echo "Error: Juju application '$APP_NAME' not found." >&2
+        echo "${RED}Error:${NC}: Juju application '$APP_NAME' not found." >&2
         echo "Please check the application name and your current Juju model." >&2
         exit 1
     fi
@@ -142,7 +201,7 @@ unseal_unit() {
     # Check if unit initialized.
     if [ "$initialized" == "false" ]; then
         printf "\n"
-        echo "    Error: Unit '$unit_name' did not initialize after $MAX_INIT_WAIT_ATTEMPTS attempts. Skipping."
+        echo "    ${YELLOW}Error:${NC}: Unit '$unit_name' did not initialize after $MAX_INIT_WAIT_ATTEMPTS attempts. Skipping."
         return 1 # Failure
     fi
 
@@ -159,7 +218,7 @@ unseal_unit() {
         
         # Check for errors.
         if ! echo "$unseal_status" | jq -e . > /dev/null 2>&1; then
-            echo "Error: 'vault operator unseal' failed. Output was not valid JSON." >&2
+            echo "${RED}Error:${NC}: 'vault operator unseal' failed. Output was not valid JSON." >&2
             echo "       This could mean the key you entered was incorrect."
             echo "Raw output: $unseal_status" >&2
             return 1 # Failure
@@ -194,7 +253,7 @@ unseal_unit() {
     # Failure.
     if [ "$unsealed" == "false" ]; then
         printf "\n"
-        echo "Error: Failed to verify unseal for unit '$unit_name' after submitting keys." >&2
+        echo "${RED}Error:${NC}: Failed to verify unseal for unit '$unit_name' after submitting keys." >&2
         echo "       Please check the unit's logs."
         return 1 # Failure.
     fi
@@ -227,12 +286,12 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         -*)
-            echo "Error: Unknown option: $1" >&2
+            echo "${YELLOW}Error:${NC}: Unknown option: $1" >&2
             show_help
             exit 1
             ;;
         *)
-            echo "Error: This script does not accept positional arguments." >&2
+            echo "${YELLOW}Error:${NC}: This script does not accept positional arguments." >&2
             show_help
             exit 1
             ;;
@@ -241,10 +300,18 @@ done
 
 # --- Main Script Logic ---
 
-check_deps
-
+echo ""
 echo "-> un-seal version: $SNAP_VERSION"
 echo ""
+
+# Validate parameters *before* doing anything else
+check_params
+
+# Check dependencies
+check_deps
+
+# Set up trap for file cleanup.
+# trap cleanup EXIT
 
 # Calculate polling parameters from timeout
 MAX_INIT_WAIT_ATTEMPTS=$((TIMEOUT_MINUTES * 60 / INIT_WAIT_SLEEP))
@@ -254,13 +321,10 @@ echo "  Unit initialization timeout set to $TIMEOUT_MINUTES minutes ($MAX_INIT_W
 VAULT_CERT_FILE="${HOME}/${APP_NAME}_ca.pem"
 CREDS_FILE="${HOME}/${APP_NAME}_creds.txt"
 
-# Set up trap for file cleanup.
-# trap cleanup EXIT
-
 # We need an associative array to map unit names to their addresses.
 # This requires Bash 4+.
 if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
-    echo "Error: This script requires Bash 4.0 or newer." >&2
+    echo "${RED}Error:${NC}: This script requires Bash 4.0 or newer." >&2
     exit 1
 fi
 declare -A UNIT_ADDRESSES
@@ -288,13 +352,13 @@ while IFS=" " read -r unit_name public_address is_leader; do
 done < <(echo "$VAULT_STATUS_JSON" | jq -r --arg app "$APP_NAME" '.applications[$app].units | to_entries[] | "\(.key) \(.value."public-address") \(.value.leader)"')
 
 if [ ${#UNIT_ADDRESSES[@]} -eq 0 ]; then
-    echo "Error: Found no units with public addresses for application '$APP_NAME'." >&2
+    echo "${RED}Error:${NC}: Found no units with public addresses for application '$APP_NAME'." >&2
     exit 1
 fi
 echo "  Found ${#UNIT_ADDRESSES[@]} unit(s): ${!UNIT_ADDRESSES[*]}"
 
 if [ -z "$LEADER_UNIT_NAME" ]; then
-    echo "Error: Could not find leader unit for application '$APP_NAME'." >&2
+    echo "${RED}Error:${NC}: Could not find leader unit for application '$APP_NAME'." >&2
     echo "       Is the application name correct and has it settled?" >&2
     exit 1
 fi
@@ -303,7 +367,7 @@ echo "  Juju '$APP_NAME' leader unit is: $LEADER_UNIT_NAME"
 # Set VAULT_ADDR to the leader's address for initialization.
 LEADER_PUBLIC_ADDR=${UNIT_ADDRESSES["$LEADER_UNIT_NAME"]}
 if [ -z "$LEADER_PUBLIC_ADDR" ]; then
-     echo "Error: Could not find public-address for leader unit '$LEADER_UNIT_NAME'." >&2
+     echo "${RED}Error:${NC}: Could not find public-address for leader unit '$LEADER_UNIT_NAME'." >&2
      exit 1
 fi
 
@@ -317,7 +381,7 @@ echo ""
 CERT_SECRET_ID=$(juju secrets --format=json | jq -r 'to_entries[] | select(.value.label == "self-signed-vault-ca-certificate") | .key')
 
 if [ -z "$CERT_SECRET_ID" ] || [ "$CERT_SECRET_ID" == "null" ]; then
-    echo "Error: Could not find Juju secret with label 'self-signed-vault-ca-certificate'." >&2
+    echo "${RED}Error:${NC}: Could not find Juju secret with label 'self-signed-vault-ca-certificate'." >&2
     exit 1
 fi
 
@@ -349,13 +413,13 @@ if echo "$init_output_and_errors" | grep -q "Vault is already initialized"; then
 
     for (( i=0; i<$KEY_THRESHOLD; i++ )); do
         # Prompt for key without echoing to terminal.
-        read -p "  Enter Unseal Key $((i+1)): " key_input
+        read -sp "  Enter Unseal Key $((i+1)): " key_input
         UNSEAL_KEYS+=("$key_input")
         echo " ... key $((i+1)) received."
     done
 
     # Prompt for root token
-    read -p "  Please enter the Root Token: " VAULT_TOKEN
+    read -sp "  Please enter the Root Token: " VAULT_TOKEN
     echo " ... root token received."
     echo ""
 
@@ -366,7 +430,7 @@ else
 
     if [ -z "$init_output" ]; then
         # It failed JSON parsing *and* wasn't the "already initialized" error.
-        echo "Error: 'vault operator init' failed. Output was not valid JSON." >&2
+        echo "${RED}Error:${NC}: 'vault operator init' failed. Output was not valid JSON." >&2
         echo "Raw output:" >&2
         echo "$init_output_and_errors" >&2
         exit 1
@@ -424,7 +488,7 @@ echo ""
 # 4.1. Unseal Leader Unit first.
 echo "  Unsealing leader unit '$LEADER_UNIT_NAME' first..."
 if ! unseal_unit "$LEADER_UNIT_NAME" "$LEADER_PUBLIC_ADDR"; then
-    echo "Error: Failed to unseal leader unit. Aborting." >&2
+    echo "${RED}Error:${NC}: Failed to unseal leader unit. Aborting." >&2
     exit 1
 fi
 
@@ -440,7 +504,7 @@ for unit_name in "${!UNIT_ADDRESSES[@]}"; do
     
     # We don't exit on follower failure, just report it and continue
     if ! unseal_unit "$unit_name" "${UNIT_ADDRESSES[$unit_name]}"; then
-        echo "Error: Failed to unseal follower '$unit_name'. Continuing to next unit." >&2
+        echo "${YELLOW}Error:${NC}: Failed to unseal follower '$unit_name'. Continuing to next unit." >&2
     fi
 done
 
@@ -457,7 +521,7 @@ VAULT_SECRET_ID=$(juju add-secret one-time-token token="$VAULT_TOKEN")
 
 # Check that the command succeeded and returned a valid ID.
 if ! [[ "$VAULT_SECRET_ID" == secret:* ]]; then
-    echo "Error: Failed to create Juju secret. Output was: $VAULT_SECRET_ID" >&2
+    echo "${RED}Error:${NC}: Failed to create Juju secret. Output was: $VAULT_SECRET_ID" >&2
     exit 1
 fi
 echo "  Created Juju secret: $VAULT_SECRET_ID"
