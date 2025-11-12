@@ -65,7 +65,7 @@ The `un-seal` snap bundles the following tools, so you don't need to install the
     This snap must be installed with `--classic` confinement to access your host `juju` command.
     ```bash
     # The version/arch may differ
-    sudo snap install ./un-seal_8.1_amd64.snap --classic
+    sudo snap install ./un-seal_1.0.0_amd64.snap --classic
     ```
     
 ## Usage
