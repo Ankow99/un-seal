@@ -159,6 +159,18 @@ check_deps() {
     fi
     echo "  All dependencies found."
 
+    # Verify the application name exists in Juju.
+    echo "  Verifying Juju application '$APP_NAME' exists..."
+    # We pipe the json status to jq and check if the applications object has our app name as a key.
+    # 'jq -e' will set a non-zero exit code if the check is false.
+    if ! juju status --format=json | jq -e --arg app "$APP_NAME" '.applications | has($app)' > /dev/null 2>&1; then
+        echo -e "${RED}Error:${NC} Juju application '$APP_NAME' not found in the current model." >&2
+        echo "Please check the application name and your current Juju model." >&2
+        exit 1
+    fi
+    echo "  Application found."
+    echo ""
+    
     # Verify the application name exists in Juju
     echo "  Verifying Juju application '$APP_NAME' exists..."
     if ! juju status "$APP_NAME" > /dev/null 2>&1; then
