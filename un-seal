@@ -243,7 +243,6 @@ done
 
 check_deps
 
-echo ""
 echo "-> un-seal version: $SNAP_VERSION"
 echo ""
 
