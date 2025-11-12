@@ -75,10 +75,10 @@ un-seal
 ```
 
 ### Options
-* `-a, --app-name <name>`: The name of the Juju Vault application (default: "vault").
-* `-s, --key-shares <num>`: The number of key shares *to generate* on first-time init (default: 5).
-* `-t, --key-threshold <num>`: The number of keys *required* to unseal (default: 3).
-* `-T, --timeout <mins>`: The timeout in minutes to wait for follower units to initialize (default: 10).
+* `-a, --app-name <name>`: The name of the Juju Vault application (default: "vault"). Must exist in Juju.
+* `-s, --key-shares <num>`: The number of key shares *to generate* on first-time init (default: 5). Must be >= 1.
+* `-t, --key-threshold <num>`: The number of keys *required* to unseal (default: 3). Must be >= 1 and <= key-shares.
+* `-T, --timeout <mins>`: The timeout in minutes to wait for follower units to initialize (default: 10). Must be >= 1.
 * `-h, --help`: Show the help message.
 
 ### Example
