@@ -1,0 +1,483 @@
+#!/bin/bash
+
+# ---
+# un-seal: A helper script to initialize or unseal a Juju-deployed Vault application.
+# version: 8.1
+#
+# This script automatically finds the Juju leader unit for the Vault
+# application.
+#
+# 1. If Vault is *not* initialized:
+#    - Runs 'vault operator init'.
+#    - Saves the new keys and root token to $HOME/APPNAME_creds.txt.
+#    - Uses these new keys to unseal all units.
+#
+# 2. If Vault is *already* initialized:
+#    - Prompts the user to enter the unseal keys (based on Vault's threshold).
+#    - Prompts the user to enter the root token.
+#    - Uses these provided keys to unseal all units.
+#
+# Finally, it passes the root token to the charm via 'authorize-charm'
+# on the leader unit.
+#
+# Made by: Pablo Gonzalez De Greiff @ Canonical
+# ---
+
+# Exit immediately if a command exits with a non-zero status.
+# Treat unset variables as an error.
+# The return value of a pipeline is the status of the last command to exit with a
+# non-zero status, or zero if no command exited with a non-zero status.
+set -euo pipefail
+
+# --- Configuration ---
+SNAP_VERSION=${SNAP_VERSION:-"dev"}
+KEY_SHARES=3
+KEY_THRESHOLD=2
+APP_NAME="vault" # Default Juju application name
+TIMEOUT_MINUTES=10 # Default timeout for unit initialization
+INIT_WAIT_SLEEP=30 # 30 second poll interval
+
+# --- Helper Functions ---
+
+# Function to display help message
+show_help() {
+    cat << EOF
+Usage: $(basename "$0") [options]
+Version: $SNAP_VERSION
+
+Initializes or unseals the Juju-deployed HashiCorp Vault application.
+This script is interactive. If Vault is already initialized, it will
+prompt for the existing unseal keys and root token.
+
+This script finds the application leader, initializes it, fetches the CA,
+unseals every unit in the application, and then passes the root token back
+to the charm on the leader via 'authorize-charm'.
+
+Options:
+  -a, --app-name <name>     The name of the Juju Vault application (default: "vault").
+  -s, --key-shares <num>    The number of key shares to generate (default: 3).
+  -t, --key-threshold <num> The number of keys required to unseal (default: 2).
+  -T, --timeout <mins>      The timeout in minutes to wait for follower units to initialize (default: 10).
+  -h, --help                Show this help message.
+
+Example:
+  # Initialize 'vault' app with 3 shares, requiring 2 to unseal
+  $(basename "$0") --app-name vault -s 3 -t 2
+EOF
+}
+
+# Cleanup function to remove temporary files
+cleanup() {
+    if [ -n "${VAULT_CERT_FILE:-}" ] && [ -f "$VAULT_CERT_FILE" ]; then
+        rm -f "$VAULT_CERT_FILE"
+        echo "  Temporary CA file '$VAULT_CERT_FILE' removed."
+    fi
+}
+
+# Function to check for required command-line tools
+check_deps() {
+    local missing_deps=0
+    
+    echo "  Checking dependencies..."
+
+    if ! juju --version > /dev/null 2>&1; then
+        echo "Error: 'juju' command not found or not functional." >&2
+        missing_deps=1
+    fi
+    
+    if ! jq --version > /dev/null 2>&1; then
+        echo "Error: 'jq' command not found or not functional (check for library errors)." >&2
+        missing_deps=1
+    fi
+    
+    if ! vault -version > /dev/null 2>&1; then
+        echo "Error: 'vault' command not found or not functional." >&2
+        missing_deps=1
+    fi
+
+    if [ "$missing_deps" -eq 1 ]; then
+        exit 1
+    fi
+    echo "  All dependencies found."
+
+    # Verify the application name exists in Juju
+    echo "  Verifying Juju application '$APP_NAME' exists..."
+    if ! juju status "$APP_NAME" > /dev/null 2>&1; then
+        echo "Error: Juju application '$APP_NAME' not found." >&2
+        echo "Please check the application name and your current Juju model." >&2
+        exit 1
+    fi
+    echo "  Application found."
+    echo ""
+}
+
+# Function to handle all unseal logic - unseal_unit(unit_name, unit_addr)
+# Returns 0 on success, 1 on failure
+unseal_unit() {
+    local unit_name="$1"
+    local unit_addr="$2"
+    local status_json=""
+    local unseal_status=""
+    local verify_status=""
+    local initialized=false
+    local unsealed=false
+
+    export VAULT_ADDR="https://$unit_addr:8200"
+    echo "---"
+    echo "  Targeting unit '$unit_name' at $VAULT_ADDR"
+
+    # 1. Wait for the unit to be initialized.
+    echo "    Waiting for unit to report as initialized..."
+    for (( attempt=1; attempt<=$MAX_INIT_WAIT_ATTEMPTS; attempt++ )); do
+        status_json=$(vault status -format=json 2>/dev/null || true)
+        if [ -n "$status_json" ] && [ "$(echo "$status_json" | jq -r '.initialized')" == "true" ]; then
+            printf "\r    Unit is initialized.                          \n"
+            initialized=true
+            break
+        fi
+        printf "\r    Waiting for unit to report as initialized... (attempt $attempt/$MAX_INIT_WAIT_ATTEMPTS)"
+        sleep $INIT_WAIT_SLEEP
+    done
+
+    # Check if unit initialized.
+    if [ "$initialized" == "false" ]; then
+        printf "\n"
+        echo "    Error: Unit '$unit_name' did not initialize after $MAX_INIT_WAIT_ATTEMPTS attempts. Skipping."
+        return 1 # Failure
+    fi
+
+    # 2. Check if already unsealed.
+    if [ "$(echo "$status_json" | jq -r '.sealed')" != "true" ]; then
+        echo "    Unit '$unit_name' is already unsealed. Skipping."
+        return 0 # Success
+    fi
+
+    # 3. Unit is initialized but sealed, submit the correct number of keys.
+    for (( i=0; i<$KEY_THRESHOLD; i++ )); do
+        echo "    Submitting Unseal Key $((i+1)) to '$unit_name'..."
+        unseal_status=$(vault operator unseal -format=json "${UNSEAL_KEYS[$i]}")
+        
+        # Check for errors.
+        if ! echo "$unseal_status" | jq -e . > /dev/null 2>&1; then
+            echo "Error: 'vault operator unseal' failed. Output was not valid JSON." >&2
+            echo "       This could mean the key you entered was incorrect."
+            echo "Raw output: $unseal_status" >&2
+            return 1 # Failure
+        fi
+        
+        # Check if unsealed. If we get it, break early.
+        if echo "$unseal_status" | jq -r '.sealed' | grep -q 'false'; then
+            break
+        fi
+
+        # Print progress if it's not the final key.
+        progress=$(echo "$unseal_status" | jq -r '.progress')
+        total=$(echo "$unseal_status" | jq -r '.t')
+        if [[ "$progress" != "null" ]] && [[ "$total" != "null" ]] && [[ "$progress" -gt 0 ]]; then
+            echo "    Progress: $progress / $total"
+        fi
+    done
+
+    # 4. Verify the unseal.
+    echo "    Verifying unseal status..."
+    for (( attempt=1; attempt<=$MAX_INIT_WAIT_ATTEMPTS; attempt++ )); do
+        verify_status=$(vault status -format=json 2>/dev/null || true)
+        if echo "$verify_status" | jq -r '.sealed' | grep -q 'false'; then
+            printf "\r    Unit '$unit_name' is now unsealed.          \n"
+            unsealed=true
+            break
+        fi
+        printf "\r    Verifying unseal status... (attempt $attempt/$MAX_INIT_WAIT_ATTEMPTS)"
+        sleep 3
+    done
+    
+    # Failure.
+    if [ "$unsealed" == "false" ]; then
+        printf "\n"
+        echo "Error: Failed to verify unseal for unit '$unit_name' after submitting keys." >&2
+        echo "       Please check the unit's logs."
+        return 1 # Failure.
+    fi
+    
+    return 0 # Success.
+}
+
+# --- Argument Parsing ---
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -a|--app-name)
+            APP_NAME="$2"
+            shift 2
+            ;;
+        -s|--key-shares)
+            KEY_SHARES="$2"
+            shift 2
+            ;;
+        -t|--key-threshold)
+            KEY_THRESHOLD="$2"
+            shift 2
+            ;;
+        -T|--timeout)
+            TIMEOUT_MINUTES="$2"
+            shift 2
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -*)
+            echo "Error: Unknown option: $1" >&2
+            show_help
+            exit 1
+            ;;
+        *)
+            echo "Error: This script does not accept positional arguments." >&2
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+# --- Main Script Logic ---
+
+check_deps
+
+echo ""
+echo "-> un-seal version: $SNAP_VERSION"
+echo ""
+
+# Calculate polling parameters from timeout
+MAX_INIT_WAIT_ATTEMPTS=$((TIMEOUT_MINUTES * 60 / INIT_WAIT_SLEEP))
+echo "  Unit initialization timeout set to $TIMEOUT_MINUTES minutes ($MAX_INIT_WAIT_ATTEMPTS checks, $INIT_WAIT_SLEEP sec interval)."
+
+# Use a predictable file in the user's HOME directory for the CA and credentials.
+VAULT_CERT_FILE="${HOME}/${APP_NAME}_ca.pem"
+CREDS_FILE="${HOME}/${APP_NAME}_creds.txt"
+
+# Set up trap for file cleanup.
+# trap cleanup EXIT
+
+# We need an associative array to map unit names to their addresses.
+# This requires Bash 4+.
+if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+    echo "Error: This script requires Bash 4.0 or newer." >&2
+    exit 1
+fi
+declare -A UNIT_ADDRESSES
+
+echo ""
+echo "  Starting un-seal process for Juju application: $APP_NAME"
+echo "  Shares:      $KEY_SHARES"
+echo "  Threshold:   $KEY_THRESHOLD"
+echo ""
+
+# 1. Find Vault units and leader.
+echo "-> 1. Finding Vault units and leader for application '$APP_NAME'..."
+VAULT_STATUS_JSON=$(juju status --format=json)
+LEADER_UNIT_NAME=""
+
+echo ""
+echo "  Parsing unit information..."
+while IFS=" " read -r unit_name public_address is_leader; do
+    if [ -n "$unit_name" ] && [ -n "$public_address" ] && [ "$public_address" != "null" ]; then
+        UNIT_ADDRESSES["$unit_name"]="$public_address"
+        if [ "$is_leader" == "true" ]; then
+            LEADER_UNIT_NAME="$unit_name"
+        fi
+    fi
+done < <(echo "$VAULT_STATUS_JSON" | jq -r --arg app "$APP_NAME" '.applications[$app].units | to_entries[] | "\(.key) \(.value."public-address") \(.value.leader)"')
+
+if [ ${#UNIT_ADDRESSES[@]} -eq 0 ]; then
+    echo "Error: Found no units with public addresses for application '$APP_NAME'." >&2
+    exit 1
+fi
+echo "  Found ${#UNIT_ADDRESSES[@]} unit(s): ${!UNIT_ADDRESSES[*]}"
+
+if [ -z "$LEADER_UNIT_NAME" ]; then
+    echo "Error: Could not find leader unit for application '$APP_NAME'." >&2
+    echo "       Is the application name correct and has it settled?" >&2
+    exit 1
+fi
+echo "  Juju '$APP_NAME' leader unit is: $LEADER_UNIT_NAME"
+
+# Set VAULT_ADDR to the leader's address for initialization.
+LEADER_PUBLIC_ADDR=${UNIT_ADDRESSES["$LEADER_UNIT_NAME"]}
+if [ -z "$LEADER_PUBLIC_ADDR" ]; then
+     echo "Error: Could not find public-address for leader unit '$LEADER_UNIT_NAME'." >&2
+     exit 1
+fi
+
+export VAULT_ADDR="https://$LEADER_PUBLIC_ADDR:8200"
+echo "  Leader VAULT_ADDR set to: $VAULT_ADDR (for init)"
+echo ""
+
+# 2. Fetch Juju secret for Vault CA certificate.
+echo "-> 2. Fetching Vault CA certificate..."
+echo ""
+CERT_SECRET_ID=$(juju secrets --format=json | jq -r 'to_entries[] | select(.value.label == "self-signed-vault-ca-certificate") | .key')
+
+if [ -z "$CERT_SECRET_ID" ] || [ "$CERT_SECRET_ID" == "null" ]; then
+    echo "Error: Could not find Juju secret with label 'self-signed-vault-ca-certificate'." >&2
+    exit 1
+fi
+
+juju show-secret "$CERT_SECRET_ID" --reveal --format=json | jq -r '.[].content.Data.certificate' > "$VAULT_CERT_FILE"
+echo "  Created temporary CA file: $VAULT_CERT_FILE"
+
+export VAULT_CAPATH="$VAULT_CERT_FILE"
+echo "  VAULT_CAPATH set to temporary file: $VAULT_CAPATH"
+echo ""
+
+# 3. Initialize Vault.
+echo "-> 3. Initializing Vault (targeting leader $LEADER_UNIT_NAME)..."
+# We use -format=json for reliable parsing.
+init_output_and_errors=$(vault operator init -key-shares="$KEY_SHARES" -key-threshold="$KEY_THRESHOLD" -format=json 2>&1 || true)
+
+# Declare keys and token vars.
+UNSEAL_KEYS=()
+VAULT_TOKEN=""
+
+# First, check for the specific "already initialized" error.
+if echo "$init_output_and_errors" | grep -q "Vault is already initialized"; then
+    echo ""
+    echo "  Vault is already initialized. Please provide the existing credentials."
+    
+    # Get the required threshold
+    status_json=$(vault status -format=json 2>/dev/null || true)
+    KEY_THRESHOLD=$(echo "$status_json" | jq -r '.t')
+    echo "  Vault status shows a key threshold of $KEY_THRESHOLD. Please enter that many keys."
+
+    for (( i=0; i<$KEY_THRESHOLD; i++ )); do
+        # Prompt for key without echoing to terminal.
+        read -p "  Enter Unseal Key $((i+1)): " key_input
+        UNSEAL_KEYS+=("$key_input")
+        echo " ... key $((i+1)) received."
+    done
+
+    # Prompt for root token
+    read -p "  Please enter the Root Token: " VAULT_TOKEN
+    echo " ... root token received."
+    echo ""
+
+else
+    # Vault is NOT initialized. Check for other errors.
+    # We redirect jq's stderr to /dev/null to silence "parse error" messages.
+    init_output=$(echo "$init_output_and_errors" | jq -e . 2> /dev/null)
+
+    if [ -z "$init_output" ]; then
+        # It failed JSON parsing *and* wasn't the "already initialized" error.
+        echo "Error: 'vault operator init' failed. Output was not valid JSON." >&2
+        echo "Raw output:" >&2
+        echo "$init_output_and_errors" >&2
+        exit 1
+    fi
+    
+    # If we are here, init_output *is* valid JSON, so we proceed with new creds.
+    
+    echo ""
+    echo "  Vault Initialized Successfully."
+    
+    # Parse JSON output
+    UNSEAL_KEYS=($(echo "$init_output" | jq -r '.unseal_keys_b64[]'))
+    VAULT_TOKEN=$(echo "$init_output" | jq -r '.root_token')
+    
+    # Save the credentials to a file.
+    echo "  Saving new credentials to $CREDS_FILE..."
+
+    # Write credentials securely.
+    {
+        echo "--- Vault Credentials ($APP_NAME) ---"
+        echo "Generated: $(date)"
+        echo ""
+        echo "Root Token:"
+        echo "$VAULT_TOKEN"
+        echo ""
+        echo "Unseal Keys (${#UNSEAL_KEYS[@]}):"
+        for key in "${UNSEAL_KEYS[@]}"; do
+            echo "$key"
+        done
+        echo "---"
+    } > "$CREDS_FILE"
+    
+    # Set permissions so only the user can read it.
+    chmod 600 "$CREDS_FILE"
+
+    echo "---"
+    echo "  IMPORTANT:"
+    echo "  New credentials have been saved to $CREDS_FILE"
+    echo "  Please back up this file immediately."
+    echo ""
+    echo "  Initial Root Token: $VAULT_TOKEN"
+    echo ""
+    echo "  Unseal Keys (${#UNSEAL_KEYS[@]}):"
+    for i in "${!UNSEAL_KEYS[@]}"; do
+        echo "    Key $((i+1)): ${UNSEAL_KEYS[$i]}"
+    done
+    echo "---"
+    echo ""
+fi
+
+# 4. Unseal all Vault units.
+echo "-> 4. Unsealing all ${#UNIT_ADDRESSES[@]} Vault units (requires $KEY_THRESHOLD keys each)..."
+echo ""
+
+# 4.1. Unseal Leader Unit first.
+echo "  Unsealing leader unit '$LEADER_UNIT_NAME' first..."
+if ! unseal_unit "$LEADER_UNIT_NAME" "$LEADER_PUBLIC_ADDR"; then
+    echo "Error: Failed to unseal leader unit. Aborting." >&2
+    exit 1
+fi
+
+# 4.2. Unseal Follower Units.
+echo ""
+echo "  Unsealing all follower units..."
+
+for unit_name in "${!UNIT_ADDRESSES[@]}"; do
+    # Skip the leader, it's already done
+    if [ "$unit_name" == "$LEADER_UNIT_NAME" ]; then
+        continue
+    fi
+    
+    # We don't exit on follower failure, just report it and continue
+    if ! unseal_unit "$unit_name" "${UNIT_ADDRESSES[$unit_name]}"; then
+        echo "Error: Failed to unseal follower '$unit_name'. Continuing to next unit." >&2
+    fi
+done
+
+echo "---"
+echo "  All units unseal process complete."
+echo ""
+
+# 5. Pass Root Token to Juju.
+echo "-> 5. Passing Root Token to Juju as 'one-time-token'"
+echo ""
+
+# Capture the full secret ID.
+VAULT_SECRET_ID=$(juju add-secret one-time-token token="$VAULT_TOKEN")
+
+# Check that the command succeeded and returned a valid ID.
+if ! [[ "$VAULT_SECRET_ID" == secret:* ]]; then
+    echo "Error: Failed to create Juju secret. Output was: $VAULT_SECRET_ID" >&2
+    exit 1
+fi
+echo "  Created Juju secret: $VAULT_SECRET_ID"
+echo ""
+
+echo "-> 6. Granting secret to '$APP_NAME'"
+echo ""
+juju grant-secret one-time-token "$APP_NAME"
+
+echo "-> 7. Triggering 'authorize-charm' action on application leader ($LEADER_UNIT_NAME)"
+echo ""
+
+# Set VAULT_ADDR back to leader for any token-based operations if needed.
+export VAULT_ADDR="https://$LEADER_PUBLIC_ADDR:8200"
+
+juju run "$LEADER_UNIT_NAME" authorize-charm secret-id="${VAULT_SECRET_ID#secret:}"
+
+echo "-> 8. Cleaning up one-time Juju secret"
+juju remove-secret "$VAULT_SECRET_ID"
+
+echo ""
+echo "  All done. Vault application '$APP_NAME' is initialized, all units are unsealed, and the application leader is authorized."

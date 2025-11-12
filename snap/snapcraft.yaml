@@ -1,0 +1,52 @@
+name: un-seal
+base: core22
+version: '8.1'
+
+title: un-seal
+license: GPL-3.0-only
+contact: pablo.degreiff@canonical.com
+
+summary: Tool to initialize and unseal a Juju-deployed Vault cluster.
+description: |
+  This script automates the process of initializing or unsealing a
+  Juju-deployed Vault cluster. It handles leader-finding,
+  key generation/prompting, unsealing all units, and authorizing
+  the charm.
+
+  This snap bundles 'jq' and 'vault'. It requires 'juju' to be
+  installed on the host system.
+
+website: https://github.com/Ankow99/un-seal
+issues: https://github.com/Ankow99/un-seal/issues
+source-code: https://github.com/Ankow99/un-seal
+
+grade: stable
+confinement: classic
+
+parts:
+  un-seal:
+    plugin: dump
+    source: .
+    organize:
+      un-seal: bin/un-seal
+
+  # Part to bundle jq
+  jq:
+    plugin: nil
+    stage-packages:
+      - jq
+      - libjq1
+      - libonig5
+
+  # Part to bundle vault
+  vault:
+    plugin: nil
+    stage-snaps:
+      - vault
+
+apps:
+  un-seal:
+    command: bin/un-seal
+    environment:
+      PATH: $SNAP/bin:$SNAP/usr/bin:$PATH
+      LD_LIBRARY_PATH: $SNAP/usr/lib/x86_64-linux-gnu:$SNAP/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}
