@@ -79,7 +79,7 @@ un-seal
 ```
 
 ### Options
-* `-a, --charm-name <name>`: The name of the Juju Vault charm (default: "vault"). Must exist in Juju.
+* `-a, --charm-name <name>`: The name of the Juju Vault charm (default: "vault"). Must exist in your current Juju model.
 * `-s, --key-shares <num>`: The number of key shares *to generate* on first-time init (default: 3). Must be >= 1.
 * `-t, --key-threshold <num>`: The number of keys *required* to unseal (default: 2). Must be >= 1 and <= key-shares.
 * `-T, --timeout <mins>`: The timeout in minutes to wait for follower units to initialize (default: 10). Must be >= 1.
@@ -90,14 +90,14 @@ un-seal
 ### Examples
 
 **Initialize** a cluster named `vault-ha`, encrypting for a specific GPG email:
-\```bash
+```bash
 un-seal --charm-name vault-ha --gpg-id "security@example.com"
-\```
+```
 
 **Unseal** a cluster using an existing encrypted file (prompts for YubiKey):
-\```bash
+```bash
 un-seal --charm-name vault-ha
-\```
+```
 
 ## How It Works
 
