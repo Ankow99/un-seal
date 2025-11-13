@@ -1,6 +1,6 @@
 name: un-seal
 base: core22
-version: '1.0.0'
+version: '2.1.0'
 
 title: un-seal
 license: GPL-3.0-only
@@ -13,8 +13,11 @@ description: |
   key generation/prompting, unsealing all units, and authorizing
   the charm.
 
-  This snap bundles 'jq' and 'vault'. It requires 'juju' to be
-  installed on the host system.
+  It can securely store and load unseal keys from a GPG-encrypted
+  file, using a YubiKey for hardware-backed security.
+
+  This snap bundles 'jq', 'vault', and 'gpg'. It requires 'juju'
+  to be installed on the host system.
 
 website: https://github.com/Ankow99/un-seal
 issues: https://github.com/Ankow99/un-seal/issues
@@ -43,6 +46,16 @@ parts:
     plugin: nil
     stage-snaps:
       - vault
+
+  # Part to bundle GPG and smart card tools
+  gpg:
+    plugin: nil
+    stage-packages:
+      - gpg
+      - gnupg-agent
+      - scdaemon
+      - pcscd
+      - libccid
 
 apps:
   un-seal:
