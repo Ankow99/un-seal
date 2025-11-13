@@ -69,7 +69,7 @@ The `un-seal` snap bundles the following tools, so you don't need to install the
 3.  Install the Snap:
     ```bash
     # The version/arch may differ
-    sudo snap install ./un-seal_2.1.0_amd64.snap --classic
+    sudo snap install ./un-seal_2.1.0_amd64.snap --classic --dangerous
     ```
     
 ## Usage
