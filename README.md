@@ -112,7 +112,7 @@ The script follows this logical flow:
 5.  **Unseal Leader:** Unseals the leader unit *first* using the decrypted keys.
 6.  **Unseal Followers:** Loops through all other units, polling for initialization, and unseals them.
 7.  **Authorize Charm:** Creates a Juju secret with the root token, grants it to the application, and runs `authorize-charm`.
-8.  **Secure Cleanup:** Uses `shred` to wipe the temporary CA file and secrets. If initialization was successful, it deletes the credentials file.
+8.  **Secure Cleanup:** Uses `shred` to wipe the temporary CA file and secrets. If initialization, unsealing and authorizing was successful, it deletes the credentials file.
 
 ## License
 This project is licensed under the GPL-3.0-only license - see the `LICENSE` file for details.
