@@ -2,7 +2,7 @@
 
 # ---
 # un-seal: A helper script to initialize or unseal a Juju-deployed Vault charm.
-# version: 2.1.0 (GPG/YubiKey Edition)
+# version: 2.2.0 (GPG/YubiKey Edition)
 #
 # This script automatically finds the Juju leader unit for the Vault
 # charm.
@@ -32,7 +32,7 @@
 set -euo pipefail
 
 # --- Configuration ---
-SNAP_VERSION=${SNAP_VERSION:-"2.1.0-dev"}
+SNAP_VERSION=${SNAP_VERSION:-"2.2.0-dev"}
 KEY_SHARES=3
 KEY_THRESHOLD=2
 CHARM_NAME="vault" # Default Juju charm name
@@ -40,6 +40,7 @@ TIMEOUT_MINUTES=10 # Default timeout for unit initialization (min)
 INIT_WAIT_SLEEP=30 # 30 second poll interval
 CREDS_FILE="" # Path to encrypted credentials file (defaults to $HOME/${CHARM_NAME}_creds.gpg)
 GPG_ID="" # GPG Recipient ID for encryption
+SEAL=false # Default: Do not invoke cute seal at the end
 
 # --- Colors ---
 # Check if stderr is a TTY
@@ -47,18 +48,63 @@ if [ -t 2 ]; then
     RED='\033[0;31m'
     YELLOW='\033[0;33m'
     GREEN='\033[0;32m'
+    BLUE='\033[1;34m'
+    CYAN='\033[1;36m'
     NC='\033[0m' # No Color
 else
     RED=''
     YELLOW=''
     GREEN=''
+    BLUE=''
     NC=''
 fi
 
 # --- Helper Functions ---
 
+seal() {
+    printf "${CYAN}"
+    cat << 'EOF'
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣀⣀⣀⣀⣀⣀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⡶⠟⠛⠉⠉⠉⠀⠈⠉⠉⠉⠛⠷⣦⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⡾⠋⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⣦⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢰⡟⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠹⣧⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣾⠁⠀⠀⠀⠀⠀⠀⠀⢀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⢻⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⢰⣿⡷⠀⠀⠀⠀⠠⣿⣿⣿⡇⠀⠀⠀⠀⠀⠀⠀⢸⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠐⠶⣼⡏⠘⠛⠁⢴⣦⡄⡀⠀⠙⠛⠛⠁⠖⠚⠉⠀⠀⠀⠀⢸⢧⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠐⠒⣿⠀⠀⠀⠳⠼⠧⠤⠝⠁⠀⠀⠀⠐⠒⠲⠆⠀⠀⠀⠀⠑⠘⠙⢦⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠒⢻⣆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⢦⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⢦⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⢷⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠻⣦⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⣦⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣷⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⣦⡀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⣷⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⣦⡀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢿⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⣦⠀⠀⠀⠀⠀
+⠀⠀⣶⡄⠀⠀⠀⠀⢠⣶⠀⠀⠀⣀⣤⣶⣶⣤⣄⠀⠀⠀⠀⠀⠀⠈⣿⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⡏⠀⠀⠀⠀⠀⢠⡀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢷⡄⠀⠀⠀
+⠀⠀⣿⡇⠀⠀⠀⠀⢸⣿⠀⠀⣾⡟⠋⠉⠉⠛⢿⣧⠀⠀⠀⠀⠀⠀⡿⢿⡄⠀⠀⠀⠀⠀⠀⠀⠀⢸⡇⠀⠀⠀⠀⠀⠀⢳⣱⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠹⣆⠀⠀
+⠀⠀⣿⡇⠀⠀⠀⠀⢸⣿⠀⠀⣿⡇⠀⠀⠀⠀⢸⣿⠀⣿⣿⣿⣿⠀⡇⠈⢿⣄⠀⠀⠀⠀⠀⠀⠀⣸⠀⠀⠀⠀⠀⠀⠀⠀⢿⡃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠸⡆⠀
+⠀⠀⠻⣷⣄⣀⣀⣠⣾⣿⠀⠀⣿⡇⠀⠀⠀⠀⢸⣿⠀⠀⠀⠀⠀⠀⣿⠀⠀⠻⣷⣄⠀⠀⠀⠀⠀⡏⠀⠀⠀⠀⠀⠀⠀⠀⠘⣧⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢹⡀
+⠀⠀⠀⠀⠉⠉⠉⠉⠁⠀⠀⠀⠉⠁⠀⠀⠀⠀⠈⠉⠀⠀⠀⠀⠀⠀⢿⡀⠀⠀⠈⠙⠷⣦⡀⠀⠀⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣇
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠸⣧⠀⠀⠀⠀⠀⠈⢻⣷⣦⣿⡇⠀⠀⠀⠀⠀⢦⠀⢠⡿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠹⣆⠀⠀⠠⣄⢀⡾⠁⠈⢹⣧⠀⠀⢀⠀⠀⠈⢛⣿⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠹⣦⡀⣀⣽⠟⠀⠀⠀⠀⠻⣧⡀⠘⢦⡀⢀⣾⠷⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠉⠀⠀⠀⠀⠀⠀⠀⠙⢿⣤⣈⣻⠿⠁⠀⠈⢧⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣸
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣭⡽⠿⠶⠦⣤⣄⣼⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⠇
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡴⠦⣀⡀⣀⣤⠶⠛⠉⠀⠀⠀⠀⠀⠐⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⠏⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣧⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⢀⡴⠋⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠸⡆⠀⠀⠀⠀⠀⠀⠀⢀⡴⣚⡭⠿⠂⠀⠀⠀⠀⠀⠀⠀⢰⣹⠋⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⠢⣀⠀⠀⠀⠀⣠⠿⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡇⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠓⢲⡾⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡼⠁⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⡿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⡼⠁⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣼⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⡴⠋⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢻⡇⠀⠀⠀⠀⢀⣀⣀⣀⡤⠤⠚⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⢿⡄⠀⣴⠟⠋⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠓⠋⠀⠀
+EOF
+    printf "${NC}"
+}
+
 # Function to display help message
 show_help() {
+    #seal
     cat << EOF
 Usage: $(basename "$0") [options]
 Version: $SNAP_VERSION
@@ -72,24 +118,19 @@ unseals every unit in the charm, and then passes the root token back
 to the charm on the leader via 'authorize-charm'.
 
 Options:
-  -a, --charm-name <name>     (Optional) The name of the Juju Vault charm.
+  -a, --charm-name <name>   (Optional) The name of the Juju Vault charm.
                             (default: "vault") Must exist in your Juju model.
-
   -s, --key-shares <num>    (Optional) The number of key shares to generate.
                             (default: 3) Must be >= 1
-
   -t, --key-threshold <num> (Optional) The number of keys required to unseal.
                             (default: 2) Must be >= 1 and <= key-shares
-
   -T, --timeout <mins>      (Optional) The timeout in minutes to wait for units to initialize.
                             (default: 10) Must be >= 1
-
   -c, --creds-file <path>   (Optional) Path to the GPG-encrypted credentials file.
-                            (default: $HOME/(charm-name)_creds.gpg)
-
+                            (default: $HOME/[charm-name]_creds.gpg)
   -g, --gpg-id <id>         (Optional) The GPG Key ID or email to use for encryption.
                             (will be prompted for on init if not provided)
-
+  -S, --seal                (Easter Egg) Invoke cute Seal after success.
   -h, --help                Show this help message.
 
 Example:
@@ -236,11 +277,11 @@ save_credentials_gpg() {
     # Set permissions so only the user can read/write it.
     chmod 600 "$CREDS_FILE"
     
-    echo "---"
+    echo -e "${CYAN}---${NC}"
     echo -e "  ${GREEN}IMPORTANT:${NC}"
     echo -e "  New credentials have been ${GREEN}GPG-ENCRYPTED${NC} and saved to $CREDS_FILE"
     echo "  Please back up this file immediately."
-    echo "---"
+    echo -e "${CYAN}---${NC}"
     echo ""
     return 0
 }
@@ -300,7 +341,7 @@ unseal_unit() {
     local unsealed=false
 
     export VAULT_ADDR="https://$unit_addr:8200"
-    echo "---"
+    echo -e "${CYAN}---${NC}"
     echo "  Targeting unit '$unit_name' at $VAULT_ADDR"
 
     # 1. Wait for the unit to be initialized.
@@ -325,7 +366,7 @@ unseal_unit() {
 
     # 2. Check if already unsealed.
     if [ "$(jq -r '.sealed' <<< "$status_json")" != "true" ]; then
-        echo "    Unit '$unit_name' is already unsealed. Skipping."
+        echo -e "    Unit '$unit_name' is already ${GREEN}unsealed${NC}. Skipping."
         return 0 # Success
     fi
 
@@ -407,6 +448,10 @@ while [[ $# -gt 0 ]]; do
             GPG_ID="$2"
             shift 2
             ;;
+        -S|--seal)
+            SEAL=true
+            shift 1
+            ;;
         -h|--help)
             show_help
             exit 0
@@ -427,7 +472,7 @@ done
 # --- Main Script Logic ---
 
 echo ""
-echo -e "${GREEN}-> un-seal version: $SNAP_VERSION${NC}"
+echo -e "${CYAN}-> un-seal version: $SNAP_VERSION${NC}"
 echo ""
 
 # Validate parameters *before* doing anything else.
@@ -469,7 +514,7 @@ echo "  Creds File:   $CREDS_FILE"
 echo ""
 
 # 1. Find Vault units and leader.
-echo "-> 1. Finding Vault units and leader for charm '$CHARM_NAME'..."
+echo -e "${CYAN}-> 1.${NC} Finding Vault units and leader for charm '$CHARM_NAME'..."
 VAULT_STATUS_JSON=$(juju status --format=json)
 LEADER_UNIT_NAME=""
 
@@ -509,7 +554,7 @@ echo "  Leader VAULT_ADDR set to: $VAULT_ADDR (for init)"
 echo ""
 
 # 2. Fetch Juju secret for Vault CA certificate.
-echo "-> 2. Fetching Vault CA certificate..."
+echo -e "${CYAN}-> 2.${NC} Fetching Vault CA certificate..."
 echo ""
 CERT_SECRET_ID=$(juju secrets --format=json | jq -r 'to_entries[] | select(.value.label == "self-signed-vault-ca-certificate") | .key')
 
@@ -526,7 +571,7 @@ echo "  VAULT_CAPATH set to temporary file: $VAULT_CAPATH"
 echo ""
 
 # 3. Initialize Vault.
-echo "-> 3. Initializing Vault (targeting leader $LEADER_UNIT_NAME)..."
+echo -e "${CYAN}-> 3.${NC} Initializing Vault (targeting leader $LEADER_UNIT_NAME)..."
 # We use -format=json for reliable parsing.
 init_output_and_errors=$(vault operator init -key-shares="$KEY_SHARES" -key-threshold="$KEY_THRESHOLD" -format=json 2>&1 || true)
 
@@ -604,7 +649,7 @@ else
     if ! save_credentials_gpg "$init_output"; then
         echo ""
         echo -e "${RED}!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!${NC}" >&2
-        echo -e "${RED}  Error: Could not save encrypted credentials to $CREDS_FILE!  ${NC}" >&2
+        echo -e "${RED}  Error: Could not save encrypted credentials to '$CREDS_FILE'!${NC}" >&2
         echo -e "${RED}    Warning: Proceeding with unseal using in-memory keys.      ${NC}" >&2
         echo -e "${RED}      THE KEYS WILL BE LOST IF YOU CLOSE THIS TERMINAL.        ${NC}" >&2
         echo -e "${RED}         PLEASE MANUALLY SAVE THE KEYS PRINTED BELOW.          ${NC}" >&2
@@ -622,7 +667,7 @@ else
 fi
 
 # 4. Unseal all Vault units.
-echo "-> 4. Unsealing all ${#UNIT_ADDRESSES[@]} Vault units (requires $KEY_THRESHOLD keys each)..."
+echo -e "${CYAN}-> 4.${NC} Unsealing all ${#UNIT_ADDRESSES[@]} Vault units (requires $KEY_THRESHOLD keys each)..."
 echo ""
 
 # Initialize success counter.
@@ -657,18 +702,18 @@ for unit_name in "${!UNIT_ADDRESSES[@]}"; do
 done
 
 # Final summary check.
-echo "---"
+echo -e "${CYAN}---${NC}"
 total_units=${#UNIT_ADDRESSES[@]}
 if [ "$successful_unseals" -eq "$total_units" ]; then
     echo -e "  ${GREEN}Success:${NC} All $total_units units are unsealed."
     echo ""
 else
     echo -e "  ${YELLOW}Warning:${NC} $successful_unseals out of $total_units units were successfully unsealed."
+    echo ""
 fi
-echo ""
 
 # 5. Pass Root Token to Juju.
-echo "-> 5. Passing Root Token to Juju as 'one-time-token'"
+echo -e "${CYAN}-> 5.${NC} Passing Root Token to Juju as 'one-time-token'"
 echo ""
 
 # Pass the token and capture the full secret ID.
@@ -682,12 +727,12 @@ fi
 echo "  Created Juju secret: $VAULT_SECRET_ID"
 echo ""
 
-echo "-> 6. Granting secret to '$CHARM_NAME'"
+echo -e "${CYAN}-> 6.${NC} Granting secret to '$CHARM_NAME'"
 echo ""
 # Grant secret to the charm-name charm.
 juju grant-secret one-time-token "$CHARM_NAME"
 
-echo "-> 7. Triggering 'authorize-charm' action on charm leader ($LEADER_UNIT_NAME)"
+echo -e "${CYAN}-> 7.${NC} Triggering 'authorize-charm' action on charm leader ($LEADER_UNIT_NAME)"
 echo ""
 authorized_success=false
 
@@ -699,7 +744,7 @@ else
     echo -e "${RED}Error:${NC} 'authorize-charm' action failed."
 fi
 
-echo "-> 8. Cleaning up one-time Juju secret"
+echo -e "${CYAN}-> 8.${NC} Cleaning up one-time Juju secret"
 echo ""
 # Remove the secret.
 juju remove-secret "$VAULT_SECRET_ID"
@@ -717,12 +762,16 @@ else
     echo -e "Charm Authorization: ${RED}Failed${NC}"
 fi
 
-echo ""
 if [ "$successful_unseals" -eq "${#UNIT_ADDRESSES[@]}" ] && [ "$authorized_success" == "true" ]; then
+    # Check if cute seal was invoked.
+    if [ "$SEAL" == "true" ]; then
+        seal
+    fi
     echo -e "${GREEN}✔ Success: All units unsealed and Charm authorized.${NC}"
+    echo ""
     # Shred credential file since all units were unsealed and the charm was authorized.
     secure_delete "$CREDS_FILE"
 else
     echo -e "${RED}✖ Failed: Operation incomplete.${NC}"
+    echo ""
 fi
-echo ""
