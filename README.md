@@ -69,7 +69,7 @@ The `un-seal` snap bundles the following tools, so you don't need to install the
 3.  Install the Snap:
     ```bash
     # The version/arch may differ
-    sudo snap install ./un-seal_2.1.0_amd64.snap --classic --dangerous
+    sudo snap install ./un-seal_2.2.0_amd64.snap --classic --dangerous
     ```
     
 ## Usage
@@ -85,6 +85,7 @@ un-seal
 * `-T, --timeout <mins>`: The timeout in minutes to wait for follower units to initialize (default: 10). Must be >= 1.
 * `-c, --creds-file <path>`: Path to the GPG-encrypted credentials file (default: `$HOME/[charm-name]_creds.gpg`).
 * `-g, --gpg-id <id>`: The GPG Key ID or email to use for encryption. Required during initialization (will prompt if omitted).
+* `-S, --seal`: (Easter Egg) Invoke cute Seal after success.
 * `-h, --help`: Show the help message.
 
 ### Examples
