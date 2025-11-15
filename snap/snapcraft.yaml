@@ -1,6 +1,6 @@
 name: un-seal
 base: core22
-version: '2.2.0'
+version: '3.0.0'
 
 title: un-seal
 license: GPL-3.0-only
@@ -8,16 +8,21 @@ contact: pablo.degreiff@canonical.com
 
 summary: Tool to initialize and unseal a Juju-deployed Vault cluster.
 description: |
-  This script automates the process of initializing or unsealing a
-  Juju-deployed Vault cluster. It handles leader-finding,
-  key generation/prompting, unsealing all units, and authorizing
-  the charm.
+  Automates the initialization or unsealing of a Juju-deployed Vault cluster.
+  It handles leader-finding, unsealing all units, and automatically
+  authorizing the Juju charm.
 
-  It can securely store and load unseal keys from a GPG-encrypted
-  file, using a YubiKey for hardware-backed security.
+  This tool securely manages credentials by storing the root token and each
+  unseal key in separate GPG-encrypted files, enabling hardware-backed
+  security (YubiKey) and separation of duties.
 
-  This snap bundles 'jq', 'vault', and 'gpg'. It requires 'juju'
-  to be installed on the host system.
+  It features a robust 3-tier loading system:
+  1. Auto-detects keys in the credentials directory.
+  2. Falls back to prompting for individual file paths.
+  3. Provides a final fallback for raw, manual key entry.
+
+  This snap bundles 'jq', 'vault', and 'gpg'. It requires the 'juju'
+  command to be installed on the host system.
 
 website: https://github.com/Ankow99/un-seal
 issues: https://github.com/Ankow99/un-seal/issues
