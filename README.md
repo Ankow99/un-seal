@@ -88,7 +88,7 @@ un-seal [options]
 | `-c` | `--creds-dir` | Directory to save/load GPG-encrypted files. | `$HOME/[charm-name]_creds/` |
 | `-g` | `--gpg-id` | GPG Key ID/Email for encryption (Init only). | *(Prompts if empty during init)* |
 |      | `--skip-auth` | Force skip the charm authorization steps (5-8). | `false` |
-| `-S` | `--seal` | (Easter Egg) Invoke the seal after success. | `false` |
+| `-S` | `--seal` | (Easter Egg) Invoke a cute Seal after success. | `false` |
 | `-h` | `--help` | Show help message. | |
 
 ## Examples
