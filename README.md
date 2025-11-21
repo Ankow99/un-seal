@@ -10,21 +10,21 @@ Deploying a charmed Vault with Juju requires a specific sequence of operations t
 
 The tool automatically detects the state of the cluster and performs the necessary actions:
 
-1.  **Cluster Initialization:** Generates key shares and the root token, encrypts them individually to a specified directory, and unseals the cluster.
-2.  **Cluster Unsealing:** Detects sealed units (e.g., following a restart), decrypts the necessary keys from storage, and brings the cluster online.
+1.  Cluster Initialization: Generates key shares and the root token, encrypts them individually to a specified directory, and unseals the cluster.
+2.  Cluster Unsealing: Detects sealed units (e.g., following a restart), decrypts the necessary keys from storage, and brings the cluster online.
 
 ## Features
 
-* **Automated Leader Detection:** Queries the Juju model to identify and target the application leader for initialization.
-* **Multi-File Credential Storage:** Stores the root token and each unseal key in separate GPG-encrypted files (e.g., `vault_token.gpg`, `vault_key1.gpg`). This architecture supports the separation of duties by allowing keys to be distributed among different operators.
-* **Hardware-Backed Security:** fully integrates with GPG, enabling the use of smart cards and YubiKeys for encryption and decryption operations.
-* **Resilient Credential Loading:** Implements a three-tier logic to retrieve keys:
-    1.  **Auto-Load:** Scans the credentials directory for encrypted files.
-    2.  **File Prompt:** Prompts for specific file paths if automatic detection is incomplete.
-    3.  **Manual Entry:** Accepts raw input for keys and tokens as a final fallback mechanism.
-* **Smart Threshold Detection:** Queries the Vault status to determine the exact number of unseal keys required before prompting the user.
-* **Charm Authorization:** Automates the Juju secret lifecycle (`add-secret` -> `grant-secret` -> `authorize-charm`) to provision the charm with the root token securely.
-* **Secure Cleanup:** Utilizes `shred` to overwrite and remove sensitive temporary files (such as the CA certificate) immediately after use.
+* Automated Leader Detection: Queries the Juju model to identify and target the application leader for initialization.
+* Multi-File Credential Storage: Stores the root token and each unseal key in separate GPG-encrypted files (e.g., `vault_token.gpg`, `vault_key1.gpg`). This architecture supports the separation of duties by allowing keys to be distributed among different operators.
+* Hardware-Backed Security: fully integrates with GPG, enabling the use of smart cards and YubiKeys for encryption and decryption operations.
+* Resilient Credential Loading: Implements a three-tier logic to retrieve keys:
+    1.  Auto-Load: Scans the credentials directory for encrypted files.
+    2.  File Prompt: Prompts for specific file paths if automatic detection is incomplete.
+    3.  Manual Entry: Accepts raw input for keys and tokens as a final fallback mechanism.
+* Smart Threshold Detection: Queries the Vault status to determine the exact number of unseal keys required before prompting the user.
+* Charm Authorization: Automates the Juju secret lifecycle (`add-secret` -> `grant-secret` -> `authorize-charm`) to provision the charm with the root token securely.
+* Secure Cleanup: Utilizes `shred` to overwrite and remove sensitive temporary files (such as the CA certificate) immediately after use.
 
 ## Dependencies
 
@@ -93,14 +93,14 @@ un-seal [options]
 
 ## Examples
 
-**Initialize a High-Availability Cluster**
+Initialize a High-Availability Cluster:
 Initialize an application named `vault-ha` with 5 key shares and a threshold of 3, encrypting credentials for a specific GPG recipient:
 
 ```bash
 un-seal --charm-name vault-ha -s 5 -t 3 --gpg-id "admin@example.com"
 ```
 
-**Unseal using a custom credential path**
+Unseal using a custom credential path:
 Unseal a cluster using keys stored on external media:
 
 ```bash
@@ -109,15 +109,15 @@ un-seal --creds-dir /media/secure-usb/vault_keys/
 
 ## Technical Workflow
 
-1.  **Environment Validation:** Checks for the presence of required dependencies (`juju`, `gpg`, `vault`) and confirms the target application exists in the current Juju model.
-2.  **Leader Identification:** Identifies the Juju leader unit, which is required for the initialization step.
-3.  **CA Retrieval:** Retrieves the `self-signed-vault-ca-certificate` secret from Juju to establish a secure TLS connection with the Vault units.
-4.  **State Management:**
-    * **Initialization:** Executes `operator init`. The output is parsed, and the root token and unseal keys are encrypted into individual files within the specified credentials directory.
-    * **Unsealing:** Queries the seal status. If sealed, the tool attempts to decrypt sufficient keys from the directory. If keys are missing, it requests file paths or raw input.
-5.  **Unseal Operations:** Unseals the **Leader** unit first to ensure cluster consensus, then iterates through all follower units.
-6.  **Charm Authorization:** Passes the Root Token to the Juju charm via a short-lived Juju secret, executing the `authorize-charm` action to complete the charm configuration.
-7.  **Cleanup:** Securely shreds temporary files created during execution. The encrypted credential files are preserved for backup purposes.
+1.  Environment Validation: Checks for the presence of required dependencies (`juju`, `gpg`, `vault`) and confirms the target application exists in the current Juju model.
+2.  Leader Identification: Identifies the Juju leader unit, which is required for the initialization step.
+3.  CA Retrieval: Retrieves the `self-signed-vault-ca-certificate` secret from Juju to establish a secure TLS connection with the Vault units.
+4.  State Management:
+    * Initialization: Executes `operator init`. The output is parsed, and the root token and unseal keys are encrypted into individual files within the specified credentials directory.
+    * Unsealing: Queries the seal status. If sealed, the tool attempts to decrypt sufficient keys from the directory. If keys are missing, it requests file paths or raw input.
+5.  Unseal Operations: Unseals the **Leader** unit first to ensure cluster consensus, then iterates through all follower units.
+6.  Charm Authorization: Passes the Root Token to the Juju charm via a short-lived Juju secret, executing the `authorize-charm` action to complete the charm configuration.
+7.  Cleanup: Securely shreds temporary files created during execution. The encrypted credential files are preserved for backup purposes.
 
 ## License
 
