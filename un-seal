@@ -2,7 +2,7 @@
 
 # ---
 # un-seal: A helper script to initialize or unseal a Juju-deployed Vault charm.
-# version: 3.1.0 (GPG/YubiKey Edition)
+# version: 3.2.0 (GPG/YubiKey Edition)
 #
 # This script automatically finds the Juju leader unit for the Vault
 # charm.
@@ -32,7 +32,7 @@
 set -euo pipefail
 
 # --- Configuration ---
-SNAP_VERSION=${SNAP_VERSION:-"3.1.0-dev"}
+SNAP_VERSION=${SNAP_VERSION:-"3.2.0-dev"}
 KEY_SHARES=3
 KEY_THRESHOLD=2
 CHARM_NAME="vault" # Default Juju charm name
@@ -43,6 +43,7 @@ GPG_ID="" # GPG Recipient ID for encryption
 SKIP_AUTH=false # Force skip authorization steps
 CHARM_ALREADY_AUTHORIZED=false # Will be set to true if 'juju status' check passes
 JUJU_RUN="" # Will be set to 'juju run-action' or 'juju run' based on version
+JUJU_EXEC="" # Will be set to 'juju exec' or 'juju run' (commands)
 DECRYPTED_FILE_CONTENT="" # Global var for decrypt_file to use
 LEGACY_VAULT=false # Will be determined by version check
 SEAL=false # Default: Do not invoke cute seal at the end
@@ -241,9 +242,11 @@ check_deps() {
         elif [ "$juju_major_version" -lt 3 ]; then
             echo -e "  Juju 2.9.x ($juju_version_string) detected. ${BYELLOW}Using legacy 'run-action' command.${NC}"
             JUJU_RUN="run-action"
+            JUJU_EXEC="run"
         else
             echo -e "  Juju 3.x+ ($juju_version_string) detected. Using modern 'run' command."
             JUJU_RUN="run"
+            JUJU_EXEC="exec"
         fi
     fi
     
@@ -282,8 +285,70 @@ check_deps() {
     echo ""
 }
 
+# Check Unit Health (MySQL and Restart Logic) - check_and_heal_unit(unit_name)
+check_and_heal_unit() {
+    local unit_name="$1"
+    local unit_data
+    local subs
+    local vault_status
+    local vault_message
+    local router_status=""
+    local router_message=""
+    
+    # Extract status for this specific unit from the global JSON.
+    unit_data=$(jq -r --arg charm "$CHARM_NAME" --arg unit "$unit_name" '.applications[$charm].units[$unit]' <<< "$VAULT_STATUS_JSON")
+    
+    vault_status=$(jq -r '."workload-status".current' <<< "$unit_data")
+    vault_message=$(jq -r '."workload-status".message' <<< "$unit_data")
+
+    # Iterate subordinates to find mysql-router.
+    subs=$(jq -r '.subordinates // {} | to_entries[] | select(.key | contains("mysql-router")) | .value' <<< "$unit_data" 2>/dev/null || echo "")
+    if [ -n "$subs" ]; then
+        router_status=$(jq -r '."workload-status".current' <<< "$subs")
+        router_message=$(jq -r '."workload-status".message' <<< "$subs")
+    fi
+
+    # Check MySQL Router Blockage.
+    if [[ "$router_status" == "blocked" ]] && [[ "$router_message" == *"Failed to connect"* ]]; then
+        echo -e "${BRED}Error:${NC} $unit_name mysql-router is blocked: $router_message"
+        echo "       Vault cannot start without the database connection."
+        echo "       Please fix the MySQL integration before attempting to unseal."
+        exit 1
+    fi
+
+    # Restart service if vault is error/hook failed, but router is not blocked (or doesn't exist)
+    if ( [[ "$vault_status" == "error" ]] && [[ "$vault_message" == *"hook failed"* ]] ) || ( [[ "$vault_status" == "blocked" ]] && [[ "$vault_message" == *"service not running"* ]] ); then
+        echo ""
+        echo -e "  Detected ${BYELLOW}stuck${NC} state on $unit_name (hook failed: start)."
+        echo -e "  Database connection appears OK (or N/A). Attempting to restart vault service..."
+        
+        # Run systemctl restart via Juju
+        if juju $JUJU_EXEC --unit "$unit_name" -- sudo systemctl restart vault; then
+            for (( attempt=1; attempt<=$MAX_WAIT_ATTEMPTS; attempt++ )); do
+                # Check service via exec
+                if juju $JUJU_EXEC --unit "$unit_name" -- systemctl is-active vault >/dev/null 2>&1; then
+                    printf "\r  ${BGREEN}Service restarted.${NC}"
+                    echo ""
+                    return 0 # Success
+                fi
+                
+                printf "\r  Waiting for service to start... (attempt $attempt/$MAX_WAIT_ATTEMPTS)"
+                sleep $INIT_WAIT_SLEEP
+            done
+            
+            printf "\n"
+            echo -e "  ${BYELLOW}Warning:${NC} Unit '$unit_name' vault service did not restart after $MAX_WAIT_ATTEMPTS attempts." >&2
+            echo ""
+            return 1 # Failure
+        else
+            echo -e "${BRED}Error:${NC} Failed to restart service on $unit_name."
+            echo ""
+            return 1 # Failure
+        fi
+    fi
+}
+
 # Function to decrypt a single file - decrypt_file(file_path)
-# Returns 0 on success, 1 on failure
 decrypt_file() {
     local file_path="$1"
     
@@ -321,7 +386,6 @@ decrypt_file() {
 }
 
 # Saves token and keys to separate encrypted files - save_credentials_gpg(json_data)
-# Returns 0 on success, 1 on failure
 save_credentials_gpg() {
     local json_data="$1"
     local token
@@ -367,7 +431,6 @@ save_credentials_gpg() {
 }
 
 # Tries auto-load credentials, falls back to manual file prompt, and then to raw prompt - load_credentials_gpg(required_keys, token_required)
-# Returns 0 on success, 1 on failure
 load_credentials_gpg() {
     local required_keys="$1"
     local token_required="$2" # "true" or "false"
@@ -524,7 +587,6 @@ load_credentials_gpg() {
 }
 
 # Function to handle all unseal logic - unseal_unit(unit_name, unit_addr)
-# Returns 0 on success, 1 on failure
 unseal_unit() {
     local unit_name="$1"
     local unit_addr="$2"
@@ -545,21 +607,21 @@ unseal_unit() {
 
     # 1. Wait for the unit to be initialized.
     echo "    Waiting for unit to report as initialized..."
-    for (( attempt=1; attempt<=$MAX_INIT_WAIT_ATTEMPTS; attempt++ )); do
+    for (( attempt=1; attempt<=$MAX_WAIT_ATTEMPTS; attempt++ )); do
         status_json=$(vault status -format=json 2>/dev/null || true)
         if [ -n "$status_json" ] && [ "$(jq -r '.initialized' <<< "$status_json")" == "true" ]; then
             printf "\r    Unit is ${BGREEN}initialized${NC}.                          \n"
             initialized=true
             break
         fi
-        printf "\r    Waiting for unit to report as initialized... (attempt $attempt/$MAX_INIT_WAIT_ATTEMPTS)"
+        printf "\r    Waiting for unit to report as initialized... (attempt $attempt/$MAX_WAIT_ATTEMPTS)"
         sleep $INIT_WAIT_SLEEP
     done
 
     # Check if unit initialized.
     if [ "$initialized" == "false" ]; then
         printf "\n"
-        echo -e "  ${BYELLOW}Warning:${NC} Unit '$unit_name' did not initialize after $MAX_INIT_WAIT_ATTEMPTS attempts. Skipping." >&2
+        echo -e "  ${BYELLOW}Warning:${NC} Unit '$unit_name' did not initialize after $MAX_WAIT_ATTEMPTS attempts. Skipping." >&2
         return 1 # Failure
     fi
 
@@ -597,14 +659,14 @@ unseal_unit() {
 
     # 4. Verify the unseal.
     echo "    Verifying unseal status..."
-    for (( attempt=1; attempt<=$MAX_INIT_WAIT_ATTEMPTS; attempt++ )); do
+    for (( attempt=1; attempt<=$MAX_WAIT_ATTEMPTS; attempt++ )); do
         verify_status=$(vault status -format=json 2>/dev/null || true)
         if jq -r '.sealed' <<< "$verify_status" | grep -q 'false'; then
             printf "\r    Unit '$unit_name' is now ${BGREEN}unsealed.${NC}          \n"
             unsealed=true
             break
         fi
-        printf "\r    Verifying unseal status... (attempt $attempt/$MAX_INIT_WAIT_ATTEMPTS)"
+        printf "\r    Verifying unseal status... (attempt $attempt/$MAX_WAIT_ATTEMPTS)"
         sleep 3
     done
     
@@ -706,8 +768,8 @@ chmod 700 "$CREDS_DIR"
 VAULT_CERT_FILE="${CREDS_DIR}/${CHARM_NAME}_ca.pem"
 
 # Calculate polling parameters from timeout.
-MAX_INIT_WAIT_ATTEMPTS=$((TIMEOUT_MINUTES * 60 / INIT_WAIT_SLEEP))
-echo "  Unit initialization timeout set to $TIMEOUT_MINUTES minutes ($MAX_INIT_WAIT_ATTEMPTS checks, $INIT_WAIT_SLEEP sec interval)."
+MAX_WAIT_ATTEMPTS=$((TIMEOUT_MINUTES * 60 / INIT_WAIT_SLEEP))
+echo "  Unit initialization timeout set to $TIMEOUT_MINUTES minutes ($MAX_WAIT_ATTEMPTS checks, $INIT_WAIT_SLEEP sec interval)."
 
 # We need an associative array to map unit names to their addresses.
 # This requires Bash 4+.
@@ -752,6 +814,9 @@ while IFS=" " read -r unit_name public_address is_leader; do
         if [ "$is_leader" == "true" ]; then
             LEADER_UNIT_NAME="$unit_name"
         fi
+        
+        # Check and heal possible vault restart errors (Arif Ali suggestion)
+        check_and_heal_unit "$unit_name"
     fi
 done < <(jq -r --arg charm "$CHARM_NAME" '.applications[$charm].units | to_entries[] | "\(.key) \(.value."public-address") \(.value.leader)"' <<< "$VAULT_STATUS_JSON")
 
