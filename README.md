@@ -72,7 +72,7 @@ To build and install locally:
 2.  Make sure the `un-seal` binary is set as executable
     ```bash
     chmod +x un-seal
-    ---
+    ```
 3.  Pack the snap:
     ```bash
     snapcraft pack
