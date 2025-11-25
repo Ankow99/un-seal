@@ -2,7 +2,7 @@
 
 # ---
 # un-seal: A helper script to initialize or unseal a Juju-deployed Vault charm.
-# version: 3.2.0 (GPG/YubiKey Edition)
+# version: 3.3.0 (GPG/YubiKey Edition)
 #
 # This script automatically finds the Juju leader unit for the Vault
 # charm.
@@ -32,7 +32,7 @@
 set -euo pipefail
 
 # --- Configuration ---
-SNAP_VERSION=${SNAP_VERSION:-"3.2.0-dev"}
+SNAP_VERSION=${SNAP_VERSION:-"3.3.0-dev"}
 KEY_SHARES=3
 KEY_THRESHOLD=2
 CHARM_NAME="vault" # Default Juju charm name
@@ -43,9 +43,10 @@ GPG_ID="" # GPG Recipient ID for encryption
 SKIP_AUTH=false # Force skip authorization steps
 CHARM_ALREADY_AUTHORIZED=false # Will be set to true if 'juju status' check passes
 JUJU_RUN="" # Will be set to 'juju run-action' or 'juju run' based on version
-JUJU_EXEC="" # Will be set to 'juju exec' or 'juju run' (commands)
-DECRYPTED_FILE_CONTENT="" # Global var for decrypt_file to use
+JUJU_EXEC="" # Will be set to 'juju exec' or 'juju run' based on version
 LEGACY_VAULT=false # Will be determined by version check
+VAULT_SERVICE="snap.vault.vaultd.service" # Will be set to 'vault.service' based on legacy vault
+DECRYPTED_FILE_CONTENT="" # Global var for decrypt_file to use
 SEAL=false # Default: Do not invoke cute seal at the end
 
 # --- Colors ---
@@ -240,11 +241,11 @@ check_deps() {
             echo -e "${BRED}Error:${NC} Could not parse Juju version: '$juju_version_string'" >&2
             missing_deps=1
         elif [ "$juju_major_version" -lt 3 ]; then
-            echo -e "  Juju 2.9.x ($juju_version_string) detected. ${BYELLOW}Using legacy 'run-action' command.${NC}"
+            echo -e "  Juju 2.9.x ($juju_version_string) detected. ${BYELLOW}Using legacy commands.${NC}"
             JUJU_RUN="run-action"
             JUJU_EXEC="run"
         else
-            echo -e "  Juju 3.x+ ($juju_version_string) detected. Using modern 'run' command."
+            echo -e "  Juju 3.x+ ($juju_version_string) detected. Using modern commands."
             JUJU_RUN="run"
             JUJU_EXEC="exec"
         fi
@@ -316,19 +317,28 @@ check_and_heal_unit() {
         exit 1
     fi
 
+    # Define boolean conditions for readability
+    local hook_failed=false
+    [[ "$vault_status" == "error" && "$vault_message" == *"hook failed"* ]] && hook_failed=true
+
+    local legacy_vault_stuck=false
+    [[ "$vault_status" == "blocked" && "$vault_message" == *"service not running"* ]] && legacy_vault_stuck=true
+
+    local modern_vault_stuck=false
+    [[ "$vault_status" == "waiting" && "$vault_message" == *"not yet available"* ]] && modern_vault_stuck=true
+
     # Restart service if vault is error/hook failed, but router is not blocked (or doesn't exist)
-    if ( [[ "$vault_status" == "error" ]] && [[ "$vault_message" == *"hook failed"* ]] ) || ( [[ "$vault_status" == "blocked" ]] && [[ "$vault_message" == *"service not running"* ]] ); then
+    if [[ "$hook_failed" == "true" || "$legacy_vault_stuck" == "true" || "$modern_vault_stuck" == "true" ]]; then
         echo ""
-        echo -e "  Detected ${BYELLOW}stuck${NC} state on $unit_name (hook failed: start)."
-        echo -e "  Database connection appears OK (or N/A). Attempting to restart vault service..."
+        echo -e "  Detected ${BYELLOW}stuck${NC} state on $unit_name ($vault_status - $vault_message)."
+        echo -e "  Database connection appears OK (or N/A). Attempting to restart '$VAULT_SERVICE'..."
         
         # Run systemctl restart via Juju
-        if juju $JUJU_EXEC --unit "$unit_name" -- sudo systemctl restart vault; then
+        if juju $JUJU_EXEC --unit "$unit_name" -- sudo systemctl restart $VAULT_SERVICE; then
             for (( attempt=1; attempt<=$MAX_WAIT_ATTEMPTS; attempt++ )); do
                 # Check service via exec
-                if juju $JUJU_EXEC --unit "$unit_name" -- systemctl is-active vault >/dev/null 2>&1; then
-                    printf "\r  ${BGREEN}Service restarted.${NC}"
-                    echo ""
+                if juju $JUJU_EXEC --unit "$unit_name" -- systemctl is-active $VAULT_SERVICE >/dev/null 2>&1; then
+                    printf "\r  ${BGREEN}Service restarted.${NC}\n"
                     return 0 # Success
                 fi
                 
@@ -808,6 +818,7 @@ else
     # Check if the track is <= 1.8
     if [ "$(printf '%s\n' "1.9" "$VAULT_TRACK" | sort -V | head -n1)" == "$VAULT_TRACK" ] && [ "$VAULT_TRACK" != "1.9" ]; then
         LEGACY_VAULT=true
+        VAULT_SERVICE="vault.service"
         echo -e "  ${BYELLOW}Legacy Vault detected (Track <= 1.8). Adjusting behavior.${NC}"
     else
         LEGACY_VAULT=false
