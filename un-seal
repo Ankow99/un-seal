@@ -796,16 +796,23 @@ echo ""
 echo "  Parsing unit information..."
 
 # Check vault charm version.
-VAULT_VERSION=$(jq -r --arg charm "$CHARM_NAME" '.applications[$charm].version // "0"' <<< "$VAULT_STATUS_JSON")
-echo -e "  Detected Vault Version: ${BGREEN}$VAULT_VERSION${NC}"
+VAULT_CHANNEL=$(jq -r --arg charm "$CHARM_NAME" '.applications[$charm]["charm-channel"] // ""' <<< "$VAULT_STATUS_JSON")
+# Extract the track (the number part before the slash), e.g., "1.16" from "1.16/stable"
+VAULT_TRACK=$(echo "$VAULT_CHANNEL" | cut -d'/' -f1)
+echo -e "  Detected Vault Version: ${BGREEN}${VAULT_CHANNEL:-"Unknown"}${NC} (Track: ${VAULT_TRACK})"
 
-# Set legacy mode <= 1.8 or modern mode > 1.8
-if [ "$(printf '%s\n' "1.9.0" "$VAULT_VERSION" | sort -V | head -n1)" == "$VAULT_VERSION" ] && [ "$VAULT_VERSION" != "1.9.0" ]; then
-    LEGACY_VAULT=true
-    echo -e "  ${BYELLOW}Legacy Vault version detected (<= 1.8). Adjusting behavior.${NC}"
-else
+if [[ -z "$VAULT_TRACK" ]] || [[ "$VAULT_TRACK" == "latest" ]]; then
     LEGACY_VAULT=false
-    echo "  Modern Vault version detected (> 1.8)."
+    echo "  No specific version track detected (or 'latest'). Assuming Modern Vault (> 1.8)."
+else
+    # Check if the track is <= 1.8
+    if [ "$(printf '%s\n' "1.9" "$VAULT_TRACK" | sort -V | head -n1)" == "$VAULT_TRACK" ] && [ "$VAULT_TRACK" != "1.9" ]; then
+        LEGACY_VAULT=true
+        echo -e "  ${BYELLOW}Legacy Vault detected (Track <= 1.8). Adjusting behavior.${NC}"
+    else
+        LEGACY_VAULT=false
+        echo "  Modern Vault detected (Track > 1.8)."
+    fi
 fi
 
 while IFS=" " read -r unit_name public_address is_leader; do
