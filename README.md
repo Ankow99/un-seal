@@ -32,9 +32,9 @@ The tool automatically detects the state of the cluster and performs the necessa
 ## Dependencies
 
 ### Host Requirements
-This snap is built with `strict` confinement, you must manually enable the following interfaces to interact with your system's tools. Ensure these are connected:
+This snap uses juju to interact with the vault charm, make sure it is installed:
 
-* **`juju`:** Required to interface with your controller/model.
+* `juju` Required to interface with your controller/model.
     ```bash
     sudo snap install juju
     ```
@@ -101,6 +101,27 @@ To build and install locally:
     sudo snap connect un-seal:dot-local-share-juju
     sudo snap connect un-seal:gpg-keys
     sudo snap connect un-seal:pcscd
+    ```
+### Use as a script
+Alternatively, you can also use the main binary as a executable script:
+
+1.  Clone the repository:
+    ```bash
+    git clone https://github.com/Ankow99/un-seal.git
+    cd un-seal
+    ```
+2.  Make sure the `un-seal` binary is set as executable
+    ```bash
+    chmod +x un-seal
+    ```
+3.  Install the dependencies:
+    ```bash
+    sudo apt install jq gpg
+    sudo snap install juju vault
+    ```
+4.  Run the binary:
+    ```bash
+    ./un-seal [options]
     ```
 
 ## Usage
