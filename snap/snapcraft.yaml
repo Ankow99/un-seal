@@ -1,6 +1,6 @@
 name: un-seal
 base: core22
-version: '3.4.0'
+version: '4.0.0'
 
 title: un-seal
 license: GPL-3.0-only
@@ -24,19 +24,60 @@ description: |
   This snap bundles 'jq', 'vault', and 'gpg'. It requires the 'juju'
   command to be installed on the host system.
 
+  How to install:
+
+     sudo snap install un-seal
+
+  then, connect the necessary interfaces:
+
+     sudo snap connect un-seal:juju-bin juju:juju-bin
+     sudo snap connect un-seal:dot-local-share-juju
+     sudo snap connect un-seal:gpg-keys
+     sudo snap connect un-seal:pcscd
+
+  Source code: https://github.com/Ankow99/un-seal
+
 website: https://github.com/Ankow99/un-seal
 issues: https://github.com/Ankow99/un-seal/issues
 source-code: https://github.com/Ankow99/un-seal
 
 grade: stable
-confinement: classic
+confinement: strict
+
+plugs:
+  # Binary Access
+  juju-bin:
+    interface: content
+    target: $SNAP/juju-snap
+    default-provider: juju
+
+  # Juju Config Access (Needs Write)
+  dot-local-share-juju:
+    interface: personal-files
+    write:
+      - $HOME/.local/share/juju
+    read:
+      - $HOME/.local/share/juju
+
+# Layouts to fix the bundled GPG paths
+layout:
+  /usr/bin/dirmngr:
+    bind-file: $SNAP/usr/bin/dirmngr
+  /usr/bin/gpg-agent:
+    bind-file: $SNAP/usr/bin/gpg-agent
+  /usr/lib/gnupg/scdaemon:
+    bind-file: $SNAP/usr/lib/gnupg/scdaemon
+  /usr/bin/shred:
+    bind-file: $SNAP/usr/bin/shred
 
 parts:
   un-seal:
     plugin: dump
     source: .
     organize:
-      un-seal: bin/un-seal
+      un-seal: usr/bin/un-seal
+    stage-packages:
+      - coreutils
 
   # Part to bundle jq
   jq:
@@ -58,13 +99,28 @@ parts:
     stage-packages:
       - gpg
       - gnupg-agent
+      - dirmngr
       - scdaemon
       - pcscd
       - libccid
+      - libusb-1.0-0
+      - libgnutls30
+      - libldap-2.5-0
+      - libksba8
+      - libnpth0
 
 apps:
   un-seal:
-    command: bin/un-seal
+    command: usr/bin/un-seal
+    plugs:
+      - network
+      - network-bind
+      - home
+      - pcscd
+      - gpg-keys
+      - juju-bin
+      - dot-local-share-juju
     environment:
       PATH: $SNAP/bin:$SNAP/usr/bin:$PATH
       LD_LIBRARY_PATH: $SNAP/usr/lib/x86_64-linux-gnu:$SNAP/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}
+      GNUPGHOME: $SNAP_USER_DATA/.gnupg

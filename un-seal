@@ -2,7 +2,7 @@
 
 # ---
 # un-seal: A helper script to initialize or unseal a Juju-deployed Vault charm.
-# version: 3.4.0 (GPG/YubiKey Edition)
+# version: 4.0.0 (GPG/YubiKey Edition)
 #
 # This script automatically finds the Juju leader unit for the Vault
 # charm.
@@ -10,11 +10,11 @@
 # 1. If Vault is *not* initialized:
 #    - Runs 'vault operator init'.
 #    - Prompts for a GPG ID (--gpg-id) if not provided.
-#    - Saves the new keys and root token to separate GPG-encrypted files in a specified directory. (defaults to $HOME/${CHARM_NAME}_creds/)
+#    - Saves the new keys and root token to separate GPG-encrypted files in a specified directory. (defaults to $REAL_HOME/${CHARM_NAME}_creds/)
 #    - Uses these new keys to unseal all units.
 #
 # 2. If Vault is *already* initialized:
-#    - Tries to auto-load credentials from --creds-dir. (defaults to $HOME/${CHARM_NAME}_creds/).
+#    - Tries to auto-load credentials from --creds-dir. (defaults to $REAL_HOME/${CHARM_NAME}_creds/).
 #    - If auto-load fails, prompts the user for the file path to the token and each required unseal key.
 #    - Prompts for YubiKey/GPG validation (PIN/touch) to decrypt the files.
 #    - Uses the decrypted keys to unseal all units.
@@ -32,22 +32,29 @@
 set -euo pipefail
 
 # --- Configuration ---
-SNAP_VERSION=${SNAP_VERSION:-"3.4.0-dev"}
+SNAP_VERSION=${SNAP_VERSION:-"4.0.0-dev"}
 KEY_SHARES=3
 KEY_THRESHOLD=2
 CHARM_NAME="vault" # Default Juju charm name
 TIMEOUT_MINUTES=10 # Default timeout for unit initialization (min)
 INIT_WAIT_SLEEP=30 # 30 second poll interval
-CREDS_DIR="" # Path to encrypted credentials directory (defaults to $HOME/${CHARM_NAME}_creds/)
+CREDS_DIR="" # Path to encrypted credentials directory (defaults to $REAL_HOME/${CHARM_NAME}_creds/)
 GPG_ID="" # GPG Recipient ID for encryption
 SKIP_AUTH=false # Force skip authorization steps
 CHARM_ALREADY_AUTHORIZED=false # Will be set to true if 'juju status' check passes
+JUJU="" # Holds correct juju binary path
 JUJU_RUN="" # Will be set to 'juju run-action' or 'juju run' based on version
 JUJU_EXEC="" # Will be set to 'juju exec' or 'juju run' based on version
 LEGACY_VAULT=false # Will be determined by version check
 VAULT_SERVICE="snap.vault.vaultd.service" # Will be set to 'vault.service' based on legacy vault
 DECRYPTED_FILE_CONTENT="" # Global var for decrypt_file to use
 SEAL=false # Default: Do not invoke cute seal at the end
+
+if [ -n "${SNAP:-}" ]; then
+    REAL_HOME="/home/$USER"
+else
+    REAL_HOME="$HOME"
+fi
 
 # --- Colors ---
 # Check if stderr is a TTY
@@ -133,7 +140,7 @@ Options:
   -T, --timeout <mins>      (Optional) The timeout in minutes to wait for units to initialize.
                                 (default: 10) Must be >= 1
   -d, --creds-dir <path>    (Optional) Path to directory for GPG-encrypted credentials (save/load).
-                                (default: $HOME/[charm-name]_creds/)
+                                (default: $REAL_HOME/[charm-name]_creds/)
   -g, --gpg-id <id>         (Optional) The GPG Key ID or email to use for encryption.
                                 (will be prompted for on init if not provided)
   -a, --skip-auth           (Optional) Force skip the charm authorization steps (5-8).
@@ -230,40 +237,56 @@ check_deps() {
     local juju_version_string
     local juju_major_version
 
-    if ! juju_version_string=$(juju --version 2>/dev/null); then
-        echo -e "${BRED}Error:${NC} 'juju' command not found or not functional." >&2
-        missing_deps=1
+    if command -v juju > /dev/null; then
+        JUJU="juju"
+    elif [[ -x "${SNAP}/juju-snap/bin/juju" ]]; then
+        # Snap environment detected, using juju plug
+        export LD_LIBRARY_PATH="${SNAP}/juju-snap/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}"
+        JUJU="${SNAP}/juju-snap/bin/juju"
     else
-        # Juju exists, let's check the version and set commands
-        juju_major_version=$(echo "$juju_version_string" | cut -d. -f1)
+        echo -e "${BRED}Error:${NC} 'juju' command not found." >&2
+        echo "       Please install Juju with: sudo snap install juju" >&2
+        missing_deps=1
+    fi
 
-        if ! [[ "$juju_major_version" =~ ^[0-9]+$ ]]; then
-            echo -e "${BRED}Error:${NC} Could not parse Juju version: '$juju_version_string'" >&2
+    if [[ -n "$JUJU" ]]; then
+        if ! juju_version_string=$($JUJU --version 2>/dev/null); then
+            echo -e "${BRED}Error:${NC} 'juju' command not found or not functional." >&2
             missing_deps=1
-        elif [ "$juju_major_version" -lt 3 ]; then
-            echo -e "  Juju 2.9.x ($juju_version_string) detected. ${BYELLOW}Using legacy commands.${NC}"
-            JUJU_RUN="run-action"
-            JUJU_EXEC="run"
         else
-            echo -e "  Juju 3.x+ ($juju_version_string) detected. Using modern commands."
-            JUJU_RUN="run"
-            JUJU_EXEC="exec"
+            # Juju exists, let's check the version and set commands
+            juju_major_version=$(echo "$juju_version_string" | cut -d. -f1)
+
+            if ! [[ "$juju_major_version" =~ ^[0-9]+$ ]]; then
+                echo -e "${BRED}Error:${NC} Could not parse Juju version: '$juju_version_string'" >&2
+                missing_deps=1
+            elif [ "$juju_major_version" -lt 3 ]; then
+                echo -e "  Juju 2.9.x ($juju_version_string) detected. ${BYELLOW}Using legacy commands.${NC}"
+                JUJU_RUN="run-action"
+                JUJU_EXEC="run"
+            else
+                echo -e "  Juju 3.x+ ($juju_version_string) detected. Using modern commands."
+                JUJU_RUN="run"
+                JUJU_EXEC="exec"
+            fi
         fi
     fi
     
     if ! jq --version > /dev/null 2>&1; then
         echo -e "${BRED}Error:${NC} 'jq' command not found or not functional." >&2
+        echo "       Please install jq with: sudo apt install jq" >&2
         missing_deps=1
     fi
     
     if ! vault -version > /dev/null 2>&1; then
         echo -e "${BRED}Error:${NC} 'vault' command not found or not functional." >&2
+        echo "       Please install Vault with: sudo snap install vault" >&2
         missing_deps=1
     fi
 
     if ! gpg --version > /dev/null 2>&1; then
         echo -e "${BRED}Error:${NC} 'gpg' command not found or not functional." >&2
-        echo "       'gpg' is required for YubiKey encryption/decryption." >&2
+        echo "       GPG is required for GPG/YubiKey encryption/decryption." >&2
         missing_deps=1
     fi
 
@@ -276,7 +299,7 @@ check_deps() {
     # Verify the charm name exists in the current Juju model.
     echo -e "  Verifying Juju charm ${BGREEN}'$CHARM_NAME'${NC} exists..."
 
-    if ! juju status --format=json | jq -e --arg charm "$CHARM_NAME" '.applications | has($charm)' > /dev/null 2>&1; then
+    if ! $JUJU status --format=json | jq -e --arg charm "$CHARM_NAME" '.applications | has($charm)' > /dev/null 2>&1; then
         echo -e "${BRED}Error:${NC} Juju charm ${BRED}'$CHARM_NAME'${NC} not found in the current model." >&2
         echo "       Please check the charm name and your current Juju model." >&2
         exit 1
@@ -334,10 +357,10 @@ check_and_heal_unit() {
         echo -e "  Database connection appears OK (or N/A). Attempting to restart '$VAULT_SERVICE'..."
         
         # Run systemctl restart via Juju
-        if juju $JUJU_EXEC --unit "$unit_name" -- sudo systemctl restart $VAULT_SERVICE; then
+        if $JUJU $JUJU_EXEC --unit "$unit_name" -- sudo systemctl restart $VAULT_SERVICE; then
             for (( attempt=1; attempt<=$MAX_WAIT_ATTEMPTS; attempt++ )); do
                 # Check service via exec
-                if juju $JUJU_EXEC --unit "$unit_name" -- systemctl is-active $VAULT_SERVICE >/dev/null 2>&1; then
+                if $JUJU $JUJU_EXEC --unit "$unit_name" -- systemctl is-active $VAULT_SERVICE >/dev/null 2>&1; then
                     printf "\r  ${BGREEN}Service restarted.${NC}\n"
                     return 0 # Success
                 fi
@@ -358,6 +381,52 @@ check_and_heal_unit() {
     fi
 }
 
+# Function to import host's GPG keys.
+sync_host_keys() {
+    echo "  Syncing GPG keys from host..."
+
+    # Allow password prompt in loopback mode
+    mkdir -m 700 -p "$GNUPGHOME"
+    echo "allow-loopback-pinentry" > "$GNUPGHOME/gpg-agent.conf"
+
+    # Restart GPG agent
+    gpgconf --kill gpg-agent >/dev/null 2>&1 || true
+    export GPG_TTY=$(tty)
+
+    # Check for GPG 2.x standard keyring (pubring.kbx).
+    if [ -f "$REAL_HOME/.gnupg/pubring.kbx" ]; then
+        # Import directly from the host file
+        gpg --quiet --no-default-keyring --lock-never --keyring "$REAL_HOME/.gnupg/pubring.kbx" --export | gpg --quiet --import 2>/dev/null
+        echo "  - Imported keys from '$REAL_HOME/.gnupg/pubring.kbx'..."
+
+    # Check for Legacy GPG keyring (pubring.gpg).
+    elif [ -f "$REAL_HOME/.gnupg/pubring.gpg" ]; then
+        gpg --quiet --lock-never --import "$REAL_HOME/.gnupg/pubring.gpg" 2>/dev/null
+        echo "  - Imported keys from '$REAL_HOME/.gnupg/pubring.gpg'..."
+    else
+        echo "  - No host GPG keyring found in '$REAL_HOME/.gnupg/'..."
+        echo -e "  ${BYELLOW}Warning:${NC} Encryption will fail and vault will be unsealed using in-memory keys..." >&2
+    fi
+
+    # Import private keys / YubiKey Stubs
+    if [ -d "$REAL_HOME/.gnupg/private-keys-v1.d" ]; then
+        mkdir -m 700 -p "$GNUPGHOME/private-keys-v1.d"
+        cp -r "$REAL_HOME"/.gnupg/private-keys-v1.d/* "$GNUPGHOME/private-keys-v1.d/" 2>/dev/null || true
+        echo "  - Imported private keys from '$REAL_HOME/.gnupg/private-keys-v1.d'..."
+    else
+        echo "  - No private keys found in '$REAL_HOME/.gnupg/'..."
+        echo -e "  ${BYELLOW}Warning:${NC} Decryption will fail and saved encrypted keys will not be used..." >&2
+    fi
+
+    # Refresh Smart Card (YubiKey) if present.
+    if command -v pcscd >/dev/null ; then
+        echo "  - Refreshing smart card status..."
+        gpg --card-status >/dev/null 2>&1 || true
+    fi
+
+    echo ""
+}
+
 # Function to decrypt a single file - decrypt_file(file_path)
 decrypt_file() {
     local file_path="$1"
@@ -376,7 +445,7 @@ decrypt_file() {
     fi
     
     # Decrypt the file.
-    if ! DECRYPTED_FILE_CONTENT=$(gpg -q -d "$file_path"); then
+    if ! DECRYPTED_FILE_CONTENT=$(gpg -q --pinentry-mode loopback -d "$file_path"); then
         echo -e "${BRED}Error:${NC} Failed to decrypt: $file_path" >&2
         echo "       Did you enter the correct PIN? Is the YubiKey plugged in?" >&2
         echo ""
@@ -410,7 +479,7 @@ save_credentials_gpg() {
     # Save Token
     local token_file="$CREDS_DIR/${CHARM_NAME}_token.gpg"
     echo "  - Encrypting token -> $token_file"
-    if ! gpg --quiet --yes -e -r "$GPG_ID" -o "$token_file" <<< "$token"; then
+    if ! gpg --quiet --yes --trust-model always -e -r "$GPG_ID" -o "$token_file" <<< "$token"; then
         echo -e "${BRED}Error:${NC} Failed to encrypt token." >&2
         echo "       Check if the GPG ID '$GPG_ID' is valid and your gpg-agent is running." >&2
         echo ""
@@ -422,7 +491,7 @@ save_credentials_gpg() {
     for i in "${!keys[@]}"; do
         local key_file="$CREDS_DIR/${CHARM_NAME}_key$((i+1)).gpg"
         echo "  - Encrypting key $((i+1)) -> $key_file"
-        if ! gpg --quiet --yes -e -r "$GPG_ID" -o "$key_file" <<< "${keys[$i]}"; then
+        if ! gpg --quiet --yes --trust-model always -e -r "$GPG_ID" -o "$key_file" <<< "${keys[$i]}"; then
             echo -e "${BRED}Error:${NC} Failed to encrypt key $((i+1))." >&2
             echo "       Check if the GPG ID '$GPG_ID' is valid and your gpg-agent is running." >&2
             echo ""
@@ -582,7 +651,7 @@ load_credentials_gpg() {
 
     # Final validation.
     if ( [ "$token_required" == "true" ] && [ -z "$VAULT_TOKEN" ] ) || [ ${#UNSEAL_KEYS[@]} -lt "$required_keys" ]; then
-        echo -e "${BRED}Error: Failed to load all required credentials.${NC}" >&2
+        echo -e "${BRED}Error:${NC} Failed to load all required credentials." >&2
         if [ "$token_required" == "true" ]; then
             echo "        - Token Loaded: $([ -n "$VAULT_TOKEN" ] && echo -e "${BGREEN}Yes${NC}" || echo -e "${BRED}No${NC}")" >&2
         fi
@@ -756,12 +825,17 @@ check_params
 # Check dependencies.
 check_deps
 
+# In case of running in Snap environment, set up loopback pin entry and sync keys.
+if [ -n "${SNAP:-}" ]; then
+    sync_host_keys
+fi
+
 # Set up trap for file cleanup.
 trap cleanup EXIT
 
 # Set default CREDS_DIR if not provided.
 if [ -z "$CREDS_DIR" ]; then
-    CREDS_DIR="${HOME}/${CHARM_NAME}_creds"
+    CREDS_DIR="${REAL_HOME}/${CHARM_NAME}_creds"
     echo -e "  ${BYELLOW}--creds-dir not specified, using default: $CREDS_DIR/ ${NC}"
 fi
 CREDS_DIR=${CREDS_DIR%/} # Remove trailing slash if present.
@@ -799,7 +873,7 @@ echo ""
 
 # 1. Find Vault units and leader.
 echo -e "${BCYAN}-> 1.${NC} Finding Vault units and leader for charm '$CHARM_NAME'..."
-VAULT_STATUS_JSON=$(juju status --format=json)
+VAULT_STATUS_JSON=$($JUJU status --format=json)
 LEADER_UNIT_NAME=""
 
 echo ""
@@ -875,14 +949,14 @@ else
     # Modern mode
     echo -e "${BCYAN}-> 2.${NC} Fetching Vault CA certificate..."
     echo ""
-    CERT_SECRET_ID=$(juju secrets --format=json | jq -r --arg charm "$CHARM_NAME" 'to_entries[] | select(.value.label == "self-signed-vault-ca-certificate" and .value.owner == $charm) | .key')
+    CERT_SECRET_ID=$($JUJU secrets --format=json | jq -r --arg charm "$CHARM_NAME" 'to_entries[] | select(.value.label == "self-signed-vault-ca-certificate" and .value.owner == $charm) | .key')
 
     if [ -z "$CERT_SECRET_ID" ] || [ "$CERT_SECRET_ID" == "null" ]; then
         echo -e "${BRED}Error:${NC} Could not find Juju secret with label 'self-signed-vault-ca-certificate'." >&2
         exit 1
     fi
 
-    juju show-secret "$CERT_SECRET_ID" --reveal --format=json | jq -r '.[].content.Data.certificate' > "$VAULT_CERT_FILE"
+    $JUJU show-secret "$CERT_SECRET_ID" --reveal --format=json | jq -r '.[].content.Data.certificate' > "$VAULT_CERT_FILE"
     echo "  Created temporary CA file: $VAULT_CERT_FILE"
 
     export VAULT_CAPATH="$VAULT_CERT_FILE"
@@ -967,7 +1041,6 @@ else
     VAULT_TOKEN=$(jq -r '.root_token' <<< "$init_output")
 
     # Prompt for GPG_ID if not provided.
-    # Prompt for GPG_ID if not provided.
     while true; do
         if [ -z "$GPG_ID" ]; then
             echo "  Vault is newly initialized, but no GPG ID was provided."
@@ -999,7 +1072,7 @@ else
             esac
         fi
     done
-    
+
     if [ -z "$GPG_ID" ] || ! save_credentials_gpg "$init_output"; then
         echo -e "${BRED}!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!${NC}" >&2
         echo -e "${BRED}  Error: Could not save encrypted credentials to '$CREDS_DIR/'!${NC}" >&2
@@ -1074,7 +1147,7 @@ if [ "$CHARM_ALREADY_AUTHORIZED" == "false" ]; then
     echo ""
 
     # Pass the token and capture the full secret ID.
-    VAULT_SECRET_ID=$(juju add-secret one-time-token token="$VAULT_TOKEN")
+    VAULT_SECRET_ID=$($JUJU add-secret one-time-token token="$VAULT_TOKEN")
 
     # Check that the command succeeded and returned a valid ID.
     if ! [[ "$VAULT_SECRET_ID" == secret:* ]]; then
@@ -1087,7 +1160,7 @@ if [ "$CHARM_ALREADY_AUTHORIZED" == "false" ]; then
     echo -e "${BCYAN}-> 6.${NC} Granting secret to '$CHARM_NAME'"
     echo ""
     # Grant secret to the charm-name charm.
-    juju grant-secret one-time-token "$CHARM_NAME"
+    $JUJU grant-secret one-time-token "$CHARM_NAME"
 
     echo -e "${BCYAN}-> 7.${NC} Running 'authorize-charm' action on charm leader ($LEADER_UNIT_NAME)"
     echo ""
@@ -1096,10 +1169,10 @@ if [ "$CHARM_ALREADY_AUTHORIZED" == "false" ]; then
 
     if [ "$LEGACY_VAULT" == "true" ]; then
         # Run the action, tee-ing the output to the terminal (tty) and also capturing it to a variable for parsing.
-        auth_output=$(juju $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" authorize-charm token="$VAULT_TOKEN" 2>&1 | tee /dev/tty || juju_exit_code=$?)
+        auth_output=$($JUJU $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" authorize-charm token="$VAULT_TOKEN" 2>&1 | tee /dev/tty || juju_exit_code=$?)
     else
         # Run the action, tee-ing the output to the terminal (tty) and also capturing it to a variable for parsing.
-        auth_output=$(juju $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" authorize-charm secret-id="${VAULT_SECRET_ID#secret:}" 2>&1 | tee /dev/tty || juju_exit_code=$?)
+        auth_output=$($JUJU $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" authorize-charm secret-id="${VAULT_SECRET_ID#secret:}" 2>&1 | tee /dev/tty || juju_exit_code=$?)
     fi
    
     # Check for a "failed" message first (case-insensitive)
@@ -1129,7 +1202,7 @@ if [ "$CHARM_ALREADY_AUTHORIZED" == "false" ]; then
     echo -e "${BCYAN}-> 8.${NC} Cleaning up one-time Juju secret"
     echo ""
     # Remove the secret.
-    juju remove-secret "$VAULT_SECRET_ID"
+    $JUJU remove-secret "$VAULT_SECRET_ID"
 
 else
     echo -e "${BCYAN}-> 5-8.${NC} Charm is already ${BGREEN}authorized${NC}. Skipping token authorization steps."
@@ -1146,7 +1219,7 @@ if [ "$LEGACY_VAULT" == "true" ]; then
     juju_exit_code=0
     
     # Run the action, tee-ing the output to the terminal (tty) and also capturing it to a variable for parsing.
-    ca_output=$(juju $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" generate-root-ca 2>&1 | tee /dev/tty || juju_exit_code=$?)
+    ca_output=$($JUJU $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" generate-root-ca 2>&1 | tee /dev/tty || juju_exit_code=$?)
  
     # Check for a "already configured" message first (case-insensitive)
     if grep -q -i "already configured" <<< "$ca_output"; then
