@@ -2,7 +2,7 @@
 
 # ---
 # un-seal: A helper script to initialize or unseal a Juju-deployed Vault charm.
-# version: 3.3.0 (GPG/YubiKey Edition)
+# version: 3.4.0 (GPG/YubiKey Edition)
 #
 # This script automatically finds the Juju leader unit for the Vault
 # charm.
@@ -32,7 +32,7 @@
 set -euo pipefail
 
 # --- Configuration ---
-SNAP_VERSION=${SNAP_VERSION:-"3.3.0-dev"}
+SNAP_VERSION=${SNAP_VERSION:-"3.4.0-dev"}
 KEY_SHARES=3
 KEY_THRESHOLD=2
 CHARM_NAME="vault" # Default Juju charm name
@@ -767,7 +767,7 @@ fi
 CREDS_DIR=${CREDS_DIR%/} # Remove trailing slash if present.
 
 # Create directory.
-if ! mkdir -p "$CREDS_DIR"; then
+if ! mkdir -p -m 700 "$CREDS_DIR"; then
     echo -e "${BRED}Error:${NC} Could not create directory: $CREDS_DIR/" >&2
     echo ""
     exit 1
@@ -869,24 +869,24 @@ echo ""
 
 # 2. Fetch Juju secret for Vault CA certificate or skip it if legacy
 if [ "$LEGACY_VAULT" == "true" ]; then
-  # Legacy mode
-  echo -e "${BCYAN}-> 2.${NC} Legacy Vault detected. Skipping Juju secret CA fetch and VAULT_CAPATH setup."
+    # Legacy mode
+    echo -e "${BCYAN}-> 2.${NC} Legacy Vault detected. Skipping Juju secret CA fetch and VAULT_CAPATH setup."
 else
-  # Modern mode
-  echo -e "${BCYAN}-> 2.${NC} Fetching Vault CA certificate..."
-  echo ""
-  CERT_SECRET_ID=$(juju secrets --format=json | jq -r 'to_entries[] | select(.value.label == "self-signed-vault-ca-certificate") | .key')
+    # Modern mode
+    echo -e "${BCYAN}-> 2.${NC} Fetching Vault CA certificate..."
+    echo ""
+    CERT_SECRET_ID=$(juju secrets --format=json | jq -r --arg charm "$CHARM_NAME" 'to_entries[] | select(.value.label == "self-signed-vault-ca-certificate" and .value.owner == $charm) | .key')
 
-  if [ -z "$CERT_SECRET_ID" ] || [ "$CERT_SECRET_ID" == "null" ]; then
-      echo -e "${BRED}Error:${NC} Could not find Juju secret with label 'self-signed-vault-ca-certificate'." >&2
-      exit 1
-  fi
+    if [ -z "$CERT_SECRET_ID" ] || [ "$CERT_SECRET_ID" == "null" ]; then
+        echo -e "${BRED}Error:${NC} Could not find Juju secret with label 'self-signed-vault-ca-certificate'." >&2
+        exit 1
+    fi
 
-  juju show-secret "$CERT_SECRET_ID" --reveal --format=json | jq -r '.[].content.Data.certificate' > "$VAULT_CERT_FILE"
-  echo "  Created temporary CA file: $VAULT_CERT_FILE"
+    juju show-secret "$CERT_SECRET_ID" --reveal --format=json | jq -r '.[].content.Data.certificate' > "$VAULT_CERT_FILE"
+    echo "  Created temporary CA file: $VAULT_CERT_FILE"
 
-  export VAULT_CAPATH="$VAULT_CERT_FILE"
-  echo "  VAULT_CAPATH set to temporary file: $VAULT_CAPATH"
+    export VAULT_CAPATH="$VAULT_CERT_FILE"
+    echo "  VAULT_CAPATH set to temporary file: $VAULT_CAPATH"
 fi
 
 echo ""
@@ -967,16 +967,40 @@ else
     VAULT_TOKEN=$(jq -r '.root_token' <<< "$init_output")
 
     # Prompt for GPG_ID if not provided.
-    if [ -z "$GPG_ID" ]; then
-        echo "  Vault is newly initialized, but no GPG ID was provided."
-        echo ""
-        while [ -z "$GPG_ID" ]; do
+    # Prompt for GPG_ID if not provided.
+    while true; do
+        if [ -z "$GPG_ID" ]; then
+            echo "  Vault is newly initialized, but no GPG ID was provided."
             read -p "  Please enter the GPG Key ID or email for encryption: " GPG_ID >&2
-        done
-        echo ""
-    fi
+            echo ""
+        fi
+
+        # Check if key exists in local keyring.
+        if gpg --list-keys "$GPG_ID" >/dev/null 2>&1; then
+            echo -e "  GPG Key '$GPG_ID' ${BGREEN}verified${NC} in local keyring."
+            echo ""
+            break # Valid key found, proceed to save.
+        else
+            echo -e "  ${BYELLOW}Warning:${NC} GPG Key '$GPG_ID' was not found in your local keys."
+            
+            # Prompt for In-Memory fallback.
+            read -p "  Do you want to continue with in-memory deployment? [y/N]: " yn
+            case $yn in
+                [Yy]* ) 
+                    echo -e "  ${BYELLOW}Proceeding with in-memory deployment.${NC} Credentials will NOT be saved to disk."
+                    GPG_ID="" # Clear ID to signal logic to skip saving.
+                    break # Exit loop.
+                    ;;
+                * ) 
+                    echo "  Please try entering the GPG ID again..."
+                    GPG_ID="" # Clear variable to trigger prompt in next try.
+                    echo ""
+                    ;;
+            esac
+        fi
+    done
     
-    if ! save_credentials_gpg "$init_output"; then
+    if [ -z "$GPG_ID" ] || ! save_credentials_gpg "$init_output"; then
         echo -e "${BRED}!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!${NC}" >&2
         echo -e "${BRED}  Error: Could not save encrypted credentials to '$CREDS_DIR/'!${NC}" >&2
         echo -e "${BRED}    Warning: Proceeding with unseal using in-memory keys.      ${NC}" >&2
