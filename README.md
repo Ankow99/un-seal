@@ -58,10 +58,10 @@ sudo snap install un-seal
 This snap is built with `strict` confinement, you must manually enable the following interfaces to interact with your system's tools. Ensure these are connected:
 
 ```bash
-sudo snap connect un-seal:juju-bin juju:juju-bin  # Access to Juju's binary
-sudo snap connect un-seal:dot-local-share-juju    # R/W Access to Juju's .local/share/juju
-sudo snap connect un-seal:gpg-keys                # Access to GPG's keys
-sudo snap connect un-seal:pcscd                   # Access to PCSCD smart card daemon (optional - only for yubikey)
+sudo snap connect un-seal:juju-bin juju:juju-bin # Access to Juju's binary
+sudo snap connect un-seal:dot-local-share-juju   # R/W Access to Juju's .local/share/juju
+sudo snap connect un-seal:gpg-keys               # Access to GPG's keys
+sudo snap connect un-seal:pcscd                  # Access to PCSCD smart card daemon (optional - only for yubikey)
 ```
 
 ### From Precompiled .snap:
