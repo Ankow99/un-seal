@@ -20,7 +20,7 @@ The tool automatically detects the state of the cluster and performs the necessa
 * Dependency Validation: Pre-checks the `mysql-router` subordinate status to verify database connectivity. Fails if the backend is unreachable to prevent indefinite hanging.
 * Version Compatibility: Automatically analyzes the charm channel to distinguish between Legacy (<=1.8) and Modern Vault. Adjusts logic dynamically
 * Multi-File Credential Storage: Stores the root token and each unseal key in separate GPG-encrypted files (e.g., `vault_token.gpg`, `vault_key1.gpg`). This architecture supports the separation of duties by allowing keys to be distributed among different operators.
-* Hardware-Backed Security: fully integrates with GPG, enabling the use of smart cards and YubiKeys for encryption and decryption operations.
+* Hardware-Backed Security: fully integrates with GPG, enabling the use of smart cards and YubiKeys for encryption and decryption operations. Uses internal loopback pinentry to request passwords directly in the terminal, eliminating the need for external GUI/TUI popups.
 * Resilient Credential Loading: Implements a three-tier logic to retrieve keys:
     1.  Auto-Load: Scans the credentials directory for encrypted files.
     2.  File Prompt: Prompts for specific file paths if automatic detection is incomplete.
@@ -32,7 +32,7 @@ The tool automatically detects the state of the cluster and performs the necessa
 ## Dependencies
 
 ### Host Requirements
-This snap is built with `classic` confinement to interact with your system's tools. Ensure these are installed:
+This snap is built with `strict` confinement, you must manually enable the following interfaces to interact with your system's tools. Ensure these are connected:
 
 * **`juju`:** Required to interface with your controller/model.
     ```bash
@@ -49,16 +49,30 @@ The snap comes pre-packaged with the following binaries; no manual installation 
 ## Installation
 
 ### Snap Store
-Install the snap with classic confinement:
+Install the snap:
 
 ```bash
-sudo snap install un-seal --classic
+sudo snap install un-seal
+```
+
+This snap is built with `strict` confinement, you must manually enable the following interfaces to interact with your system's tools. Ensure these are connected:
+
+```bash
+sudo snap connect un-seal:juju-bin juju:juju-bin  # Access to Juju's binary
+sudo snap connect un-seal:dot-local-share-juju    # R/W Access to Juju's .local/share/juju
+sudo snap connect un-seal:gpg-keys                # Access to GPG's keys
+sudo snap connect un-seal:pcscd                   # Access to PCSCD smart card daemon (optional - only for yubikey)
 ```
 
 ### From Precompiled .snap:
-Download the latest compiled .snap from [releases](https://github.com/Ankow99/un-seal/releases). This snap must be installed with `--classic` confinement to access your host `juju` command.
+Download the latest compiled .snap from [releases](https://github.com/Ankow99/un-seal/releases).
 ```bash
-sudo snap install ./un-seal_3.3.0_amd64.snap --classic --dangerous
+sudo snap install ./un-seal_4.0.0_amd64.snap
+
+sudo snap connect un-seal:juju-bin juju:juju-bin
+sudo snap connect un-seal:dot-local-share-juju
+sudo snap connect un-seal:gpg-keys
+sudo snap connect un-seal:pcscd
 ```
 
 ### Build from Source
@@ -79,7 +93,14 @@ To build and install locally:
     ```
 4.  Install the generated snap:
     ```bash
-    sudo snap install ./un-seal_3.3.0_amd64.snap --classic --dangerous
+    sudo snap install ./un-seal_4.0.0_amd64.snap
+    ```
+5.  Connect the interfaces:
+    ```bash
+    sudo snap connect un-seal:juju-bin juju:juju-bin
+    sudo snap connect un-seal:dot-local-share-juju
+    sudo snap connect un-seal:gpg-keys
+    sudo snap connect un-seal:pcscd
     ```
 
 ## Usage
@@ -121,19 +142,20 @@ un-seal --creds-dir /media/secure-usb/vault_keys/
 ## Technical Workflow
 
 1.  Environment Validation: Checks for the presence of required dependencies (`juju`, `gpg`, `vault`) and confirms the target application exists in the current Juju model.
-2.  Leader & Version Analysis: Identifies the Juju leader unit and inspects the `charm-channel` to distinguish between Legacy (≤1.8) and Modern (>1.8) architectures.
-3.  Health Check & Auto-Healing:
+2.  GPG Environment Setup: Detects if running inside a Snap, configures `gpg-agent` for loopback mode, and syncs public/private keys (stubs) from the host.
+3.  Leader & Version Analysis: Identifies the Juju leader unit and inspects the `charm-channel` to distinguish between Legacy (≤1.8) and Modern (>1.8) architectures.
+4.  Health Check & Auto-Healing:
     * Dependency Check: Verifies the `mysql-router` subordinate status; aborts immediately if the database connection is blocked to prevent indefinite hanging.
     * Recovery: Detects units in failure states (`hook failed`, `service not running`). If the database is healthy, it executes a remote `systemctl restart vault` or `systemctl restart snap.vault.vaultd` via Juju exec and polls for service recovery.
-4.  CA Retrieval (Modern Only): Retrieves the `self-signed-vault-ca-certificate` secret from Juju to establish a secure TLS connection with the Vault units.
-5.  Protocol Selection: Dynamically sets the Vault address protocol to `http` for Legacy units or `https` for Modern units.
-6.  State Management:
+5.  CA Retrieval (Modern Only): Retrieves the `self-signed-vault-ca-certificate` secret from Juju to establish a secure TLS connection with the Vault units.
+6.  Protocol Selection: Dynamically sets the Vault address protocol to `http` for Legacy units or `https` for Modern units.
+7.  State Management:
     * Initialization: Executes `operator init`. The output is parsed, and the root token and unseal keys are encrypted into individual files within the specified credentials directory.
     * Unsealing: Queries the seal status. If sealed, the tool attempts to decrypt sufficient keys from the directory. If keys are missing, it requests file paths or raw input.
-7.  Unseal Operations: Unseals the **Leader** unit first to ensure cluster consensus, then iterates through all follower units.
-8.  Charm Authorization: Passes the Root Token to the Juju charm via a short-lived Juju secret, executing the `authorize-charm` action to complete the charm configuration.
-9.  Post-Unseal Configuration (Legacy Only): If a Legacy version is detected, executes the `generate-root-ca` action on the leader immediately after authorization.
-10.  Cleanup: Securely shreds temporary files created during execution. The encrypted credential files are preserved for backup purposes.
+8.  Unseal Operations: Unseals the **Leader** unit first to ensure cluster consensus, then iterates through all follower units.
+9.  Charm Authorization: Passes the Root Token to the Juju charm via a short-lived Juju secret, executing the `authorize-charm` action to complete the charm configuration.
+10.  Post-Unseal Configuration (Legacy Only): If a Legacy version is detected, executes the `generate-root-ca` action on the leader immediately after authorization.
+11.  Cleanup: Securely shreds temporary files created during execution. The encrypted credential files are preserved for backup purposes.
 
 ## License
 
