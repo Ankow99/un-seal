@@ -1,6 +1,6 @@
 name: un-seal
 base: core22
-version: '4.0.0'
+version: '4.1.0'
 
 title: un-seal
 license: GPL-3.0-only
@@ -116,6 +116,7 @@ apps:
       - network
       - network-bind
       - home
+      - removable-media
       - pcscd
       - gpg-keys
       - juju-bin
