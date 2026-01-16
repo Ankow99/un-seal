@@ -2,7 +2,7 @@
 
 # ---
 # un-seal: A helper script to initialize or unseal a Juju-deployed Vault charm.
-# version: 4.0.0 (GPG/YubiKey Edition)
+# version: 4.1.0 (GPG/YubiKey Edition)
 #
 # This script automatically finds the Juju leader unit for the Vault
 # charm.
@@ -32,7 +32,7 @@
 set -euo pipefail
 
 # --- Configuration ---
-SNAP_VERSION=${SNAP_VERSION:-"4.0.0-dev"}
+SNAP_VERSION=${SNAP_VERSION:-"4.1.0-dev"}
 KEY_SHARES=3
 KEY_THRESHOLD=2
 CHARM_NAME="vault" # Default Juju charm name
@@ -43,7 +43,7 @@ GPG_ID="" # GPG Recipient ID for encryption
 SKIP_AUTH=false # Force skip authorization steps
 CHARM_ALREADY_AUTHORIZED=false # Will be set to true if 'juju status' check passes
 JUJU="" # Holds correct juju binary path
-JUJU_RUN="" # Will be set to 'juju run-action' or 'juju run' based on version
+JUJU_RUN="" # Will be set to 'juju run' or 'juju run-action' based on version
 JUJU_EXEC="" # Will be set to 'juju exec' or 'juju run' based on version
 LEGACY_VAULT=false # Will be determined by version check
 VAULT_SERVICE="snap.vault.vaultd.service" # Will be set to 'vault.service' based on legacy vault
@@ -237,6 +237,48 @@ check_deps() {
     local juju_version_string
     local juju_major_version
 
+    if [ -n "${SNAP:-}" ]; then
+        local snap_conn_err=0
+        
+        # Check juju-bin interface
+        if ! snapctl is-connected juju-bin; then
+            echo -e "${BRED}Error:${NC} Snap interface 'juju-bin' is disconnected." >&2
+            echo "       Access to Juju binary is required." >&2
+            echo "       Run: sudo snap connect un-seal:juju-bin juju:juju-bin" >&2
+            snap_conn_err=1
+        fi
+
+        # Check dot-local-share-juju interface
+        if ! snapctl is-connected dot-local-share-juju; then
+            echo -e "${BRED}Error:${NC} Snap interface 'dot-local-share-juju' is disconnected." >&2
+            echo "       Access to Juju credentials (~/.local/share/juju) is required." >&2
+            echo "       Run: sudo snap connect un-seal:dot-local-share-juju" >&2
+            snap_conn_err=1
+        fi
+
+        # Check gpg-keys interface
+        if ! snapctl is-connected gpg-keys; then
+            echo -e "${BRED}Error:${NC} Snap interface 'gpg-keys' is disconnected." >&2
+            echo "       Access to host GPG keys is required." >&2
+            echo "       Run: sudo snap connect un-seal:gpg-keys" >&2
+            snap_conn_err=1
+        fi
+
+        # Check pcscd interface
+        if ! snapctl is-connected pcscd; then
+            echo -e "${BRED}Error:${NC} Snap interface 'pcscd' is disconnected." >&2
+            echo "       Access to Smart Cards (YubiKey) is required." >&2
+            echo "       Run: sudo snap connect un-seal:pcscd" >&2
+            snap_conn_err=1
+        fi
+
+        if [ "$snap_conn_err" -eq 1 ]; then
+            echo ""
+            echo -e "${BRED}Aborting due to disconnected Snap interfaces.${NC}" >&2
+            exit 1
+        fi
+    fi
+
     if command -v juju > /dev/null; then
         JUJU="juju"
     elif [[ -x "${SNAP}/juju-snap/bin/juju" ]]; then
@@ -244,7 +286,7 @@ check_deps() {
         export LD_LIBRARY_PATH="${SNAP}/juju-snap/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}"
         JUJU="${SNAP}/juju-snap/bin/juju"
     else
-        echo -e "${BRED}Error:${NC} 'juju' command not found." >&2
+        echo -e "${BRED}Error:${NC} 'juju' command not found or not functional." >&2
         echo "       Please install Juju with: sudo snap install juju" >&2
         missing_deps=1
     fi
@@ -252,6 +294,7 @@ check_deps() {
     if [[ -n "$JUJU" ]]; then
         if ! juju_version_string=$($JUJU --version 2>/dev/null); then
             echo -e "${BRED}Error:${NC} 'juju' command not found or not functional." >&2
+            echo "       Please install Juju with: sudo snap install juju" >&2
             missing_deps=1
         else
             # Juju exists, let's check the version and set commands
@@ -861,7 +904,7 @@ if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
     echo -e "${BRED}Error:${NC} This script requires Bash 4.0 or newer." >&2
     exit 1
 fi
-declare -A UNIT_ADDRESSES
+declare -A UNIT_ADDRESSES=()
 
 echo ""
 echo -e "  Starting ${BCYAN}un-seal${NC} process for Juju charm: ${BGREEN}$CHARM_NAME${NC}"
@@ -907,7 +950,7 @@ while IFS=" " read -r unit_name public_address is_leader; do
             LEADER_UNIT_NAME="$unit_name"
         fi
         
-        # Check and heal possible vault restart errors (Arif Ali suggestion)
+        # Check and heal possible vault restart errors (Arif Ali's suggestion)
         check_and_heal_unit "$unit_name"
     fi
 done < <(jq -r --arg charm "$CHARM_NAME" '.applications[$charm].units | to_entries[] | "\(.key) \(.value."public-address") \(.value.leader)"' <<< "$VAULT_STATUS_JSON")
@@ -1061,13 +1104,14 @@ else
             case $yn in
                 [Yy]* ) 
                     echo -e "  ${BYELLOW}Proceeding with in-memory deployment.${NC} Credentials will NOT be saved to disk."
+                    echo ""
                     GPG_ID="" # Clear ID to signal logic to skip saving.
                     break # Exit loop.
                     ;;
                 * ) 
                     echo "  Please try entering the GPG ID again..."
-                    GPG_ID="" # Clear variable to trigger prompt in next try.
                     echo ""
+                    GPG_ID="" # Clear variable to trigger prompt in next try.
                     ;;
             esac
         fi
