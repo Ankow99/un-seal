@@ -2,7 +2,7 @@
 
 # ---
 # un-seal: A helper script to initialize or unseal a Juju-deployed Vault charm.
-# version: 4.1.0 (GPG/YubiKey Edition)
+# version: 5.0.0 (GPG/YubiKey Edition)
 #
 # This script automatically finds the Juju leader unit for the Vault
 # charm.
@@ -32,7 +32,7 @@
 set -euo pipefail
 
 # --- Configuration ---
-SNAP_VERSION=${SNAP_VERSION:-"4.1.0-dev"}
+SNAP_VERSION=${SNAP_VERSION:-"5.0.0-script"}
 KEY_SHARES=3
 KEY_THRESHOLD=2
 CHARM_NAME="vault" # Default Juju charm name
@@ -75,7 +75,7 @@ fi
 # --- Helper Functions ---
 
 seal() {
-    printf "${BCYAN}"
+    printf '%b' "${BCYAN}"
     cat << 'EOF'
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣀⣀⣀⣀⣀⣀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⡶⠟⠛⠉⠉⠉⠀⠈⠉⠉⠉⠛⠷⣦⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
@@ -112,7 +112,7 @@ seal() {
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⢿⡄⠀⣴⠟⠋⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠓⠋⠀⠀
 EOF
-    printf "${NC}"
+    printf '%b' "${NC}"
 }
 
 # Function to display help message
@@ -180,6 +180,11 @@ secure_delete() {
 cleanup() {
     if [ -n "${VAULT_CERT_FILE:-}" ] && [ -f "$VAULT_CERT_FILE" ]; then
         secure_delete "$VAULT_CERT_FILE"
+    fi
+    
+    # Remove $CREDS_DIR only if empty
+    if [ -n "${CREDS_DIR:-}" ] && [ -d "$CREDS_DIR" ]; then
+        rmdir "$CREDS_DIR" >/dev/null 2>&1 || true
     fi
 }
 
@@ -400,15 +405,17 @@ check_and_heal_unit() {
         echo -e "  Database connection appears OK (or N/A). Attempting to restart '$VAULT_SERVICE'..."
         
         # Run systemctl restart via Juju
-        if $JUJU $JUJU_EXEC --unit "$unit_name" -- sudo systemctl restart $VAULT_SERVICE; then
-            for (( attempt=1; attempt<=$MAX_WAIT_ATTEMPTS; attempt++ )); do
+        if $JUJU $JUJU_EXEC --unit "$unit_name" -- sudo systemctl restart "$VAULT_SERVICE"; then
+            local attempt
+            #for (( attempt=1; attempt<=$MAX_WAIT_ATTEMPTS; attempt++ )); do
+            for (( attempt=1; attempt<=MAX_WAIT_ATTEMPTS; attempt++ )); do
                 # Check service via exec
                 if $JUJU $JUJU_EXEC --unit "$unit_name" -- systemctl is-active $VAULT_SERVICE >/dev/null 2>&1; then
-                    printf "\r  ${BGREEN}Service restarted.${NC}\n"
+                    printf '\r  %bService restarted.%b\n' "${BGREEN}" "${NC}"
                     return 0 # Success
                 fi
                 
-                printf "\r  Waiting for service to start... (attempt $attempt/$MAX_WAIT_ATTEMPTS)"
+                printf '\r  Waiting for service to start... (attempt %s/%s)' "$attempt" "$MAX_WAIT_ATTEMPTS"
                 sleep $INIT_WAIT_SLEEP
             done
             
@@ -429,22 +436,23 @@ sync_host_keys() {
     echo "  Syncing GPG keys from host..."
 
     # Allow password prompt in loopback mode
-    mkdir -m 700 -p "$GNUPGHOME"
+    mkdir -p "$GNUPGHOME" && chmod 700 "$GNUPGHOME"
     echo "allow-loopback-pinentry" > "$GNUPGHOME/gpg-agent.conf"
 
     # Restart GPG agent
     gpgconf --kill gpg-agent >/dev/null 2>&1 || true
-    export GPG_TTY=$(tty)
+    GPG_TTY=$(tty || echo "")
+    export GPG_TTY
 
     # Check for GPG 2.x standard keyring (pubring.kbx).
     if [ -f "$REAL_HOME/.gnupg/pubring.kbx" ]; then
         # Import directly from the host file
-        gpg --quiet --no-default-keyring --lock-never --keyring "$REAL_HOME/.gnupg/pubring.kbx" --export | gpg --quiet --import 2>/dev/null
+        gpg --quiet --no-default-keyring --lock-never --keyring "$REAL_HOME/.gnupg/pubring.kbx" --export | gpg --quiet --import 2>/dev/null || true
         echo "  - Imported keys from '$REAL_HOME/.gnupg/pubring.kbx'..."
 
     # Check for Legacy GPG keyring (pubring.gpg).
     elif [ -f "$REAL_HOME/.gnupg/pubring.gpg" ]; then
-        gpg --quiet --lock-never --import "$REAL_HOME/.gnupg/pubring.gpg" 2>/dev/null
+        gpg --quiet --lock-never --import "$REAL_HOME/.gnupg/pubring.gpg" 2>/dev/null || true
         echo "  - Imported keys from '$REAL_HOME/.gnupg/pubring.gpg'..."
     else
         echo "  - No host GPG keyring found in '$REAL_HOME/.gnupg/'..."
@@ -453,7 +461,7 @@ sync_host_keys() {
 
     # Import private keys / YubiKey Stubs
     if [ -d "$REAL_HOME/.gnupg/private-keys-v1.d" ]; then
-        mkdir -m 700 -p "$GNUPGHOME/private-keys-v1.d"
+        mkdir -m 700 "$GNUPGHOME/private-keys-v1.d"
         cp -r "$REAL_HOME"/.gnupg/private-keys-v1.d/* "$GNUPGHOME/private-keys-v1.d/" 2>/dev/null || true
         echo "  - Imported private keys from '$REAL_HOME/.gnupg/private-keys-v1.d'..."
     else
@@ -478,7 +486,7 @@ decrypt_file() {
     DECRYPTED_FILE_CONTENT=""
 
     echo "  Decrypting '$file_path'..."
-    echo "  Please validate with your GPG key (YubiKey PIN/touch may be required)..."
+    echo "  Please enter passphrase for your GPG key (YubiKey PIN/touch may be required)..."
 
     # Check if path exists.
     if [ ! -f "$file_path" ]; then
@@ -609,7 +617,8 @@ load_credentials_gpg() {
 
     # Check if auto-load was successful.
     [ ${#UNSEAL_KEYS[@]} -ge "$required_keys" ] && keys_ok=true
-    ( [ "$token_required" == "false" ] || ( [ "$token_required" == "true" ] && [ -n "$VAULT_TOKEN" ] ) ) && token_ok=true
+    #( [ "$token_required" == "false" ] || ( [ "$token_required" == "true" ] && [ -n "$VAULT_TOKEN" ] ) ) && token_ok=true
+    { [ "$token_required" == "false" ] || { [ "$token_required" == "true" ] && [ -n "$VAULT_TOKEN" ]; }; } && token_ok=true
     if [ "$keys_ok" == "true" ] && [ "$token_ok" == "true" ]; then
         echo -e "  ${BGREEN}Auto-load successful. Loaded ${#UNSEAL_KEYS[@]} keys.${NC}"
         echo ""
@@ -638,7 +647,8 @@ load_credentials_gpg() {
     local remaining_keys=$(( required_keys - ${#UNSEAL_KEYS[@]} ))
     if [ "$remaining_keys" -gt 0 ]; then
         echo "  Auto-load found ${#UNSEAL_KEYS[@]} keys. Manually prompting for $remaining_keys more file paths."
-        for (( i=1; i<=$remaining_keys; i++ )); do
+        #for (( i=1; i<=$remaining_keys; i++ )); do
+        for (( i=1; i<=remaining_keys; i++ )); do
             read -e -p "  Enter path to additional Unseal Key $i (of $remaining_keys): " key_path
             key_path=$(eval echo "$key_path")
             echo ""
@@ -659,7 +669,8 @@ load_credentials_gpg() {
 
     # Check if path-load was successful.
     [ ${#UNSEAL_KEYS[@]} -ge "$required_keys" ] && keys_ok=true
-    ( [ "$token_required" == "false" ] || ( [ "$token_required" == "true" ] && [ -n "$VAULT_TOKEN" ] ) ) && token_ok=true
+    #( [ "$token_required" == "false" ] || ( [ "$token_required" == "true" ] && [ -n "$VAULT_TOKEN" ] ) ) && token_ok=true
+    { [ "$token_required" == "false" ] || { [ "$token_required" == "true" ] && [ -n "$VAULT_TOKEN" ]; }; } && token_ok=true
     if [ "$keys_ok" == "true" ] && [ "$token_ok" == "true" ]; then
         echo -e "  ${BGREEN}Credentials successfully loaded via file paths.${NC}"
         echo ""
@@ -673,7 +684,7 @@ load_credentials_gpg() {
 
     # Check if token was found, if not prompt for raw token.
     if [ "$token_required" == "true" ] && [ -z "$VAULT_TOKEN" ]; then
-        read -sp "  Please enter the '$CHARM_NAME' Token: " VAULT_TOKEN
+        read -s -p "  Please enter the '$CHARM_NAME' Token: " VAULT_TOKEN
         echo ""
     fi
 
@@ -681,9 +692,10 @@ load_credentials_gpg() {
     remaining_keys=$(( required_keys - ${#UNSEAL_KEYS[@]} ))
     if [ "$remaining_keys" -gt 0 ]; then
         echo "  Found ${#UNSEAL_KEYS[@]} keys. Manually prompting for $remaining_keys more raw keys."
-        for (( i=1; i<=$remaining_keys; i++ )); do
+        #for (( i=1; i<=$remaining_keys; i++ )); do
+        for (( i=1; i<=remaining_keys; i++ )); do
             local key_input
-            read -sp "  Please enter Unseal Key $i (of $remaining_keys): " key_input
+            read -s -p "  Please enter Unseal Key $i (of $remaining_keys): " key_input
             echo ""
 
             if [ -n "$key_input" ]; then
@@ -693,7 +705,8 @@ load_credentials_gpg() {
     fi
 
     # Final validation.
-    if ( [ "$token_required" == "true" ] && [ -z "$VAULT_TOKEN" ] ) || [ ${#UNSEAL_KEYS[@]} -lt "$required_keys" ]; then
+    #if ( [ "$token_required" == "true" ] && [ -z "$VAULT_TOKEN" ] ) || [ ${#UNSEAL_KEYS[@]} -lt "$required_keys" ]; then
+    if { [ "$token_required" == "true" ] && [ -z "$VAULT_TOKEN" ]; } || [ ${#UNSEAL_KEYS[@]} -lt "$required_keys" ]; then
         echo -e "${BRED}Error:${NC} Failed to load all required credentials." >&2
         if [ "$token_required" == "true" ]; then
             echo "        - Token Loaded: $([ -n "$VAULT_TOKEN" ] && echo -e "${BGREEN}Yes${NC}" || echo -e "${BRED}No${NC}")" >&2
@@ -729,14 +742,15 @@ unseal_unit() {
 
     # 1. Wait for the unit to be initialized.
     echo "    Waiting for unit to report as initialized..."
-    for (( attempt=1; attempt<=$MAX_WAIT_ATTEMPTS; attempt++ )); do
+    #for (( attempt=1; attempt<=$MAX_WAIT_ATTEMPTS; attempt++ )); do
+    for (( attempt=1; attempt<=MAX_WAIT_ATTEMPTS; attempt++ )); do
         status_json=$(vault status -format=json 2>/dev/null || true)
         if [ -n "$status_json" ] && [ "$(jq -r '.initialized' <<< "$status_json")" == "true" ]; then
-            printf "\r    Unit is ${BGREEN}initialized${NC}.                          \n"
+            printf '\r    Unit is %binitialized%b.                          \n' "${BGREEN}" "${NC}"
             initialized=true
             break
         fi
-        printf "\r    Waiting for unit to report as initialized... (attempt $attempt/$MAX_WAIT_ATTEMPTS)"
+        printf '\r    Waiting for unit to report as initialized... (attempt %s/%s)' "$attempt" "$MAX_WAIT_ATTEMPTS"
         sleep $INIT_WAIT_SLEEP
     done
 
@@ -754,7 +768,8 @@ unseal_unit() {
     fi
 
     # 3. Unit is initialized but sealed, submit the correct number of keys.
-    for (( i=0; i<$KEY_THRESHOLD; i++ )); do
+    #for (( i=0; i<$KEY_THRESHOLD; i++ )); do
+    for (( i=0; i<KEY_THRESHOLD; i++ )); do
         echo "    Submitting Unseal Key $((i+1)) to '$unit_name'..."
         unseal_status=$(vault operator unseal -format=json "${UNSEAL_KEYS[$i]}")
         
@@ -781,14 +796,15 @@ unseal_unit() {
 
     # 4. Verify the unseal.
     echo "    Verifying unseal status..."
-    for (( attempt=1; attempt<=$MAX_WAIT_ATTEMPTS; attempt++ )); do
+    #for (( attempt=1; attempt<=$MAX_WAIT_ATTEMPTS; attempt++ )); do
+    for (( attempt=1; attempt<=MAX_WAIT_ATTEMPTS; attempt++ )); do
         verify_status=$(vault status -format=json 2>/dev/null || true)
         if jq -r '.sealed' <<< "$verify_status" | grep -q 'false'; then
-            printf "\r    Unit '$unit_name' is now ${BGREEN}unsealed.${NC}          \n"
+            printf '\r    Unit %s is now %bunsealed.%b          \n' "$unit_name" "${BGREEN}" "${NC}"
             unsealed=true
             break
         fi
-        printf "\r    Verifying unseal status... (attempt $attempt/$MAX_WAIT_ATTEMPTS)"
+        printf '\r    Verifying unseal status... (attempt %s/%s)' "$attempt" "$MAX_WAIT_ATTEMPTS"
         sleep 3
     done
     
@@ -884,7 +900,7 @@ fi
 CREDS_DIR=${CREDS_DIR%/} # Remove trailing slash if present.
 
 # Create directory.
-if ! mkdir -p -m 700 "$CREDS_DIR"; then
+if ! mkdir -p "$CREDS_DIR"; then
     echo -e "${BRED}Error:${NC} Could not create directory: $CREDS_DIR/" >&2
     echo ""
     exit 1
@@ -1011,22 +1027,23 @@ echo ""
 # 3. Initialize Vault.
 echo -e "${BCYAN}-> 3.${NC} Initializing Vault (targeting leader $LEADER_UNIT_NAME)..."
 echo ""
-# We use -format=json for reliable parsing.
-init_output_and_errors=$(vault operator init -key-shares="$KEY_SHARES" -key-threshold="$KEY_THRESHOLD" -format=json 2>&1 || true)
 
 # Declare keys and token vars.
 UNSEAL_KEYS=()
 VAULT_TOKEN=""
 
-# First, check for the specific "already initialized" error.
-if grep -q "Vault is already initialized" <<< "$init_output_and_errors"; then
+CURRENT_STATUS=$(vault status -format=json 2>/dev/null || true)
+IS_INITIALIZED=$(jq -r '.initialized' <<< "$CURRENT_STATUS" 2>/dev/null || echo "false")
+
+# First, check if the vault is already initialized.
+if [ "$IS_INITIALIZED" == "true" ]; then
 
     echo -e "  ${BGREEN}Vault is already initialized. Loading credentials from encrypted file.${NC}"
 
     # Check if charm is already authorized.
     token_required="true"
     leader_workload_status=$(jq -r --arg charm "$CHARM_NAME" --arg leader "$LEADER_UNIT_NAME" '.applications[$charm].units[$leader]."workload-status".current' <<< "$VAULT_STATUS_JSON")
-    
+
     if [ "$SKIP_AUTH" == "true" ]; then
         echo -e "  ${BGREEN}Manual --skip-auth flag detected. Skipping token requirement...${NC}"
         CHARM_ALREADY_AUTHORIZED=true
@@ -1039,18 +1056,15 @@ if grep -q "Vault is already initialized" <<< "$init_output_and_errors"; then
         echo -e "  ${BYELLOW}Charm may not be yet authorized. (Status: '$leader_workload_status'). Token will be required.${NC}"
     fi
     echo ""
-    
-    # Get the required threshold from status to inform the user.
-    status_json=$(vault status -format=json 2>/dev/null || true)
 
     # Check loaded keys against actual threshold.
-    actual_threshold=$(jq -r '.t' <<< "$status_json")
-    
+    actual_threshold=$(jq -r '.t' <<< "$CURRENT_STATUS")
+
     if ! [[ "$actual_threshold" =~ ^[0-9]+$ ]]; then
         echo -e "${BRED}Error:${NC} Could not determine actual key threshold from 'vault status'." >&2
         exit 1
     fi
-    
+
     echo -e "  Vault status shows a key threshold of ${BGREEN}$actual_threshold${NC}."
 
     # Load credentials using three layered approach, if not, exit.
@@ -1064,30 +1078,16 @@ if grep -q "Vault is already initialized" <<< "$init_output_and_errors"; then
     echo ""
 
 else
-    # Vault is NOT initialized. Check for other errors.
-    # We redirect jq's stderr to /dev/null to silence "parse error" messages.
-    init_output=$(jq -e . 2> /dev/null <<< "$init_output_and_errors")
+    # Vault is NOT initialized. Initialize it.
 
-    if [ -z "$init_output" ]; then
-        # It failed JSON parsing *and* wasn't the "already initialized" error.
-        echo -e "${BRED}Error:${NC} 'vault operator init' failed. Output was not valid JSON." >&2
-        echo "Raw output:" >&2
-        echo "$init_output_and_errors" >&2
-        exit 1
-    fi
-
-    echo -e "  ${BGREEN}Vault Initialized Successfully.${NC}"
-    echo ""
-    
-    # Parse JSON output.
-    UNSEAL_KEYS=($(jq -r '.unseal_keys_b64[]' <<< "$init_output"))
-    VAULT_TOKEN=$(jq -r '.root_token' <<< "$init_output")
+    VALID_GPG=false
 
     # Prompt for GPG_ID if not provided.
-    while true; do
+    while [ "$VALID_GPG" == "false" ]; do
+
         if [ -z "$GPG_ID" ]; then
-            echo "  Vault is newly initialized, but no GPG ID was provided."
-            read -p "  Please enter the GPG Key ID or email for encryption: " GPG_ID >&2
+            echo "  Vault will be initialized, but no GPG ID was provided."
+            read -p "  Please enter the GPG Key ID or email for encryption: " GPG_ID
             echo ""
         fi
 
@@ -1095,27 +1095,57 @@ else
         if gpg --list-keys "$GPG_ID" >/dev/null 2>&1; then
             echo -e "  GPG Key '$GPG_ID' ${BGREEN}verified${NC} in local keyring."
             echo ""
-            break # Valid key found, proceed to save.
+            VALID_GPG=true # Valid key found, proceed to save.
         else
             echo -e "  ${BYELLOW}Warning:${NC} GPG Key '$GPG_ID' was not found in your local keys."
-            
-            # Prompt for In-Memory fallback.
-            read -p "  Do you want to continue with in-memory deployment? [y/N]: " yn
-            case $yn in
-                [Yy]* ) 
+            GPG_ID="" # Reset for retry.
+        fi
+
+        if [ "$VALID_GPG" == "false" ]; then
+            echo ""
+            echo "  What would you like to do?"
+            echo -e "  ${BGREEN}[1]${NC} Try entering GPG ID again (default)"
+            echo -e "  ${BYELLOW}[2]${NC} Proceed with in-memory deployment (NO key saving - keys will be printed once)"
+            echo -e "  ${BRED}[3]${NC} Cancel/Exit (to fix GPG setup)"
+            echo ""
+            read -p "  Select [1-3]: " choice
+            case "$choice" in
+                2|[Ii]* )
                     echo -e "  ${BYELLOW}Proceeding with in-memory deployment.${NC} Credentials will NOT be saved to disk."
                     echo ""
-                    GPG_ID="" # Clear ID to signal logic to skip saving.
-                    break # Exit loop.
+                    GPG_ID=""
                     ;;
-                * ) 
+                3|[Cc]* )
+                    echo "  Exiting..."
+                    echo ""
+                    exit 1
+                    ;;
+                * )
                     echo "  Please try entering the GPG ID again..."
                     echo ""
-                    GPG_ID="" # Clear variable to trigger prompt in next try.
                     ;;
             esac
         fi
     done
+
+    echo "  Running 'vault operator init'..."
+    init_output=$(vault operator init -key-shares="$KEY_SHARES" -key-threshold="$KEY_THRESHOLD" -format=json 2>&1 || true)
+    
+    # Check for failure (invalid JSON)
+    if ! jq -e . > /dev/null 2>&1 <<< "$init_output"; then
+        echo -e "${BRED}Error:${NC} 'vault operator init' failed. Output was not valid JSON." >&2
+        echo "Raw output:" >&2
+        echo "$init_output" >&2
+        exit 1
+    fi
+
+    echo -e "  ${BGREEN}Vault Initialized Successfully.${NC}"
+    echo ""
+
+    # Parse JSON output.
+    readarray -t UNSEAL_KEYS < <(jq -r '.unseal_keys_b64[]' <<< "$init_output")
+    #UNSEAL_KEYS=($(jq -r '.unseal_keys_b64[]' <<< "$init_output"))
+    VAULT_TOKEN=$(jq -r '.root_token' <<< "$init_output")
 
     if [ -z "$GPG_ID" ] || ! save_credentials_gpg "$init_output"; then
         echo -e "${BRED}!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!${NC}" >&2
@@ -1213,10 +1243,12 @@ if [ "$CHARM_ALREADY_AUTHORIZED" == "false" ]; then
 
     if [ "$LEGACY_VAULT" == "true" ]; then
         # Run the action, tee-ing the output to the terminal (tty) and also capturing it to a variable for parsing.
-        auth_output=$($JUJU $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" authorize-charm token="$VAULT_TOKEN" 2>&1 | tee /dev/tty || juju_exit_code=$?)
+        #auth_output=$($JUJU $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" authorize-charm token="$VAULT_TOKEN" 2>&1 | tee /dev/tty || juju_exit_code=$?)
+        auth_output=$($JUJU $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" authorize-charm token="$VAULT_TOKEN" 2>&1 | tee /dev/tty) || juju_exit_code=$?
     else
         # Run the action, tee-ing the output to the terminal (tty) and also capturing it to a variable for parsing.
-        auth_output=$($JUJU $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" authorize-charm secret-id="${VAULT_SECRET_ID#secret:}" 2>&1 | tee /dev/tty || juju_exit_code=$?)
+        #auth_output=$($JUJU $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" authorize-charm secret-id="${VAULT_SECRET_ID#secret:}" 2>&1 | tee /dev/tty || juju_exit_code=$?)
+        auth_output=$($JUJU $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" authorize-charm secret-id="${VAULT_SECRET_ID#secret:}" 2>&1 | tee /dev/tty) || juju_exit_code=$?
     fi
    
     # Check for a "failed" message first (case-insensitive)
@@ -1263,7 +1295,8 @@ if [ "$LEGACY_VAULT" == "true" ]; then
     juju_exit_code=0
     
     # Run the action, tee-ing the output to the terminal (tty) and also capturing it to a variable for parsing.
-    ca_output=$($JUJU $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" generate-root-ca 2>&1 | tee /dev/tty || juju_exit_code=$?)
+    #ca_output=$($JUJU $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" generate-root-ca 2>&1 | tee /dev/tty || juju_exit_code=$?)
+    ca_output=$($JUJU $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" generate-root-ca 2>&1 | tee /dev/tty) || juju_exit_code=$?
  
     # Check for a "already configured" message first (case-insensitive)
     if grep -q -i "already configured" <<< "$ca_output"; then
