@@ -1,24 +1,24 @@
 # un-🦭
 
-`un-seal` is a confined Snap utility designed to automate the initialization, unsealing, and authorization of Vault applications deployed via Juju.
+`un-seal` is a confined Snap utility designed to automate the initialisation, unsealing, and authorisation of Vault applications deployed via Juju.
 
 ## Overview
 
-Deploying a charmed Vault with Juju requires a specific sequence of operations to bootstrap the cluster: initializing the Vault operator, securely managing the generated unseal keys and root token, unsealing individual units, and authorizing the charm to interact with the Vault API.
+Deploying a charmed Vault with Juju requires a specific sequence of operations to bootstrap the cluster: initialising the Vault operator, securely managing the generated unseal keys and root token, unsealing individual units, and authorising the charm to interact with the Vault API.
 
 `un-seal` streamlines this workflow into a single interactive command. It is designed for security-conscious environments, supporting split-file credential storage and GPG encryption (compatible with hardware tokens such as YubiKey) to facilitate separation of duties.
 
 The tool automatically detects the state of the cluster and performs the necessary actions:
 
-1.  Cluster Initialization: Generates key shares and the root token, encrypts them individually to a specified directory, and unseals the cluster.
+1.  Cluster Initialisation: Generates key shares and the root token, encrypts them individually to a specified directory, and unseals the cluster.
 2.  Cluster Unsealing: Detects sealed units (e.g., following a restart), decrypts the necessary keys from storage, and brings the cluster online.
 
 ## Features
 
-* Automated Leader Detection: Queries the Juju model to identify and target the application leader for initialization.
+* Automated Leader Detection: Queries the Juju model to identify and target the application leader for initialisation.
 * Auto-Healing: Detects units in failure states (e.g., `hook failed`, `service not running`) and automatically triggers a service restart via `juju exec` to recover stuck units without manual intervention.
 * Dependency Validation: Pre-checks the `mysql-router` subordinate status to verify database connectivity. Fails if the backend is unreachable to prevent indefinite hanging.
-* Version Compatibility: Automatically analyzes the charm channel to distinguish between Legacy (<=1.8) and Modern Vault. Adjusts logic dynamically
+* Version Compatibility: Automatically analyses the charm channel to distinguish between Legacy (<=1.8) and Modern Vault. Adjusts logic dynamically
 * Multi-File Credential Storage: Stores the root token and each unseal key in separate GPG-encrypted files (e.g., `vault_token.gpg`, `vault_key1.gpg`). This architecture supports the separation of duties by allowing keys to be distributed among different operators.
 * Hardware-Backed Security: fully integrates with GPG, enabling the use of smart cards and YubiKeys for encryption and decryption operations. Uses internal loopback pinentry to request passwords directly in the terminal, eliminating the need for external GUI/TUI popups.
 * Resilient Credential Loading: Implements a three-tier logic to retrieve keys:
@@ -26,13 +26,13 @@ The tool automatically detects the state of the cluster and performs the necessa
     2.  File Prompt: Prompts for specific file paths if automatic detection is incomplete.
     3.  Manual Entry: Accepts raw input for keys and tokens as a final fallback mechanism.
 * Smart Threshold Detection: Queries the Vault status to determine the exact number of unseal keys required before prompting the user.
-* Charm Authorization: Automates the Juju secret lifecycle (`add-secret` -> `grant-secret` -> `authorize-charm`) to provision the charm with the root token securely.
-* Secure Cleanup: Utilizes `shred` to overwrite and remove sensitive temporary files (such as the CA certificate) immediately after use.
+* Charm Authorisation: Automates the Juju secret lifecycle (`add-secret` -> `grant-secret` -> `authorize-charm`) to provision the charm with the root token securely.
+* Secure Cleanup: Utilises `shred` to overwrite and remove sensitive temporary files (such as the CA certificate) immediately after use.
 
 ## Dependencies
 
 ### Host Requirements
-This snap uses juju to interact with the vault charm, make sure it is installed:
+This snap uses Juju to interact with the vault charm, make sure it is installed:
 
 * `juju` Required to interface with your controller/model.
     ```bash
@@ -55,19 +55,19 @@ Install the snap:
 sudo snap install un-seal
 ```
 
-This snap is built with `strict` confinement, you must manually enable the following interfaces to interact with your system's tools. Ensure these are connected:
+This snap is built with `strict` confinement; you must manually enable the following interfaces to interact with your system's tools. Ensure these are connected:
 
 ```bash
 sudo snap connect un-seal:juju-bin juju:juju-bin # Access to Juju's binary
 sudo snap connect un-seal:dot-local-share-juju   # R/W Access to Juju's .local/share/juju
 sudo snap connect un-seal:gpg-keys               # Access to GPG's keys
-sudo snap connect un-seal:pcscd                  # Access to PCSCD smart card daemon (optional - only for yubikey)
+sudo snap connect un-seal:pcscd                  # Access to PCSCD smart card daemon
 ```
 
 ### From Precompiled .snap:
 Download the latest compiled .snap from [releases](https://github.com/Ankow99/un-seal/releases).
 ```bash
-sudo snap install ./un-seal_4.0.0_amd64.snap
+sudo snap install ./un-seal_5.1.0_amd64.snap
 
 sudo snap connect un-seal:juju-bin juju:juju-bin
 sudo snap connect un-seal:dot-local-share-juju
@@ -93,7 +93,7 @@ To build and install locally:
     ```
 4.  Install the generated snap:
     ```bash
-    sudo snap install ./un-seal_4.0.0_amd64.snap
+    sudo snap install ./un-seal_5.1.0_amd64.snap
     ```
 5.  Connect the interfaces:
     ```bash
@@ -103,7 +103,7 @@ To build and install locally:
     sudo snap connect un-seal:pcscd
     ```
 ### Use as a script
-Alternatively, you can also use the main binary as a executable script:
+Alternatively, you can also use the main binary as an executable script:
 
 1.  Clone the repository:
     ```bash
@@ -142,13 +142,13 @@ un-seal [options]
 | `-T` | `--timeout` | Minutes to wait for units to initialize. | `10` |
 | `-d` | `--creds-dir` | Directory to save/load GPG-encrypted files. | `$HOME/[charm-name]_creds/` |
 | `-g` | `--gpg-id` | GPG Key ID/Email for encryption (Init only). | *(Prompts if empty during init)* |
-| `-a` | `--skip-auth` | Force skip the charm authorization steps (5-8). | `false` |
+| `-a` | `--skip-auth` | Force skip the charm authorisation steps (5-8). | `false` |
 | `-S` | `--seal` | (Easter Egg) Invoke a cute Seal after success. | `false` |
 | `-h` | `--help` | Show help message. | |
 
 ## Examples
 
-Initialize an application named `vault-ha` with 5 key shares and a threshold of 3, encrypting credentials for a specific GPG recipient:
+Initialise an application named `vault-ha` with 5 key shares and a threshold of 3, encrypting credentials for a specific GPG recipient:
 
 ```bash
 un-seal --charm-name vault-ha -s 5 -t 3 --gpg-id "admin@example.com"
@@ -171,11 +171,11 @@ un-seal --creds-dir /media/secure-usb/vault_keys/
 5.  CA Retrieval (Modern Only): Retrieves the `self-signed-vault-ca-certificate` secret from Juju to establish a secure TLS connection with the Vault units.
 6.  Protocol Selection: Dynamically sets the Vault address protocol to `http` for Legacy units or `https` for Modern units.
 7.  State Management:
-    * Initialization: Executes `operator init`. The output is parsed, and the root token and unseal keys are encrypted into individual files within the specified credentials directory.
+    * Initialisation: Executes `operator init`. The output is parsed, and the root token and unseal keys are encrypted into individual files within the specified credentials directory.
     * Unsealing: Queries the seal status. If sealed, the tool attempts to decrypt sufficient keys from the directory. If keys are missing, it requests file paths or raw input.
 8.  Unseal Operations: Unseals the **Leader** unit first to ensure cluster consensus, then iterates through all follower units.
-9.  Charm Authorization: Passes the Root Token to the Juju charm via a short-lived Juju secret, executing the `authorize-charm` action to complete the charm configuration.
-10.  Post-Unseal Configuration (Legacy Only): If a Legacy version is detected, executes the `generate-root-ca` action on the leader immediately after authorization.
+9.  Charm Authorisation: Passes the Root Token to the Juju charm via a short-lived Juju secret, executing the `authorize-charm` action to complete the charm configuration.
+10.  Post-Unseal Configuration (Legacy Only): If a Legacy version is detected, executes the `generate-root-ca` action on the leader immediately after authorisation.
 11.  Cleanup: Securely shreds temporary files created during execution. The encrypted credential files are preserved for backup purposes.
 
 ## License
