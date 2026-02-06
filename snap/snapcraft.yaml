@@ -1,6 +1,6 @@
 name: un-seal
 base: core22
-version: '5.1.0'
+version: '5.2.0'
 
 title: un-seal
 license: GPL-3.0-only
@@ -30,7 +30,6 @@ description: |
 
   then, connect the necessary interfaces:
 
-     sudo snap connect un-seal:juju-bin juju:juju-bin
      sudo snap connect un-seal:dot-local-share-juju
      sudo snap connect un-seal:gpg-keys
      sudo snap connect un-seal:pcscd
@@ -48,6 +47,7 @@ plugs:
   # Binary Access
   juju-bin:
     interface: content
+    content: juju
     target: $SNAP/juju-snap
     default-provider: juju
 
