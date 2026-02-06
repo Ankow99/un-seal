@@ -16,7 +16,7 @@ The tool automatically detects the state of the cluster and performs the necessa
 ## Features
 
 * Automated Leader Detection: Queries the Juju model to identify and target the application leader for initialisation.
-* Auto-Healing: Detects units in failure states (e.g., `hook failed`, `service not running`) and automatically triggers a service restart via `juju exec` to recover stuck units without manual intervention.
+* Auto-Healing: Detects units in failure states (e.g., `hook failed`, `service not running`), corroborates using `systemctl is-active` and automatically triggers a service restart via `juju exec` to recover stuck units without manual intervention.
 * Dependency Validation: Pre-checks the `mysql-router` subordinate status to verify database connectivity. Fails if the backend is unreachable to prevent indefinite hanging.
 * Version Compatibility: Automatically analyses the charm channel to distinguish between Legacy (<=1.8) and Modern Vault. Adjusts logic dynamically
 * Multi-File Credential Storage: Stores the root token and each unseal key in separate GPG-encrypted files (e.g., `vault_token.gpg`, `vault_key1.gpg`). This architecture supports the separation of duties by allowing keys to be distributed among different operators.
@@ -58,7 +58,6 @@ sudo snap install un-seal
 This snap is built with `strict` confinement; you must manually enable the following interfaces to interact with your system's tools. Ensure these are connected:
 
 ```bash
-sudo snap connect un-seal:juju-bin juju:juju-bin # Access to Juju's binary
 sudo snap connect un-seal:dot-local-share-juju   # R/W Access to Juju's .local/share/juju
 sudo snap connect un-seal:gpg-keys               # Access to GPG's keys
 sudo snap connect un-seal:pcscd                  # Access to PCSCD smart card daemon
@@ -67,9 +66,8 @@ sudo snap connect un-seal:pcscd                  # Access to PCSCD smart card da
 ### From Precompiled .snap:
 Download the latest compiled .snap from [releases](https://github.com/Ankow99/un-seal/releases).
 ```bash
-sudo snap install ./un-seal_5.1.0_amd64.snap
+sudo snap install ./un-seal_5.2.0_amd64.snap
 
-sudo snap connect un-seal:juju-bin juju:juju-bin
 sudo snap connect un-seal:dot-local-share-juju
 sudo snap connect un-seal:gpg-keys
 sudo snap connect un-seal:pcscd
@@ -93,11 +91,10 @@ To build and install locally:
     ```
 4.  Install the generated snap:
     ```bash
-    sudo snap install ./un-seal_5.1.0_amd64.snap
+    sudo snap install ./un-seal_5.2.0_amd64.snap
     ```
 5.  Connect the interfaces:
     ```bash
-    sudo snap connect un-seal:juju-bin juju:juju-bin
     sudo snap connect un-seal:dot-local-share-juju
     sudo snap connect un-seal:gpg-keys
     sudo snap connect un-seal:pcscd
@@ -140,7 +137,7 @@ un-seal [options]
 | `-s` | `--key-shares` | Number of key shares to generate (Init only). | `3` |
 | `-t` | `--key-threshold` | Number of keys required to unseal (Init only). | `2` |
 | `-T` | `--timeout` | Minutes to wait for units to initialize. | `10` |
-| `-d` | `--creds-dir` | Directory to save/load GPG-encrypted files. | `$HOME/[charm-name]_creds/` |
+| `-d` | `--creds-dir` | Directory to save/load GPG-encrypted files. | `$HOME/<model-name>_creds/` |
 | `-g` | `--gpg-id` | GPG Key ID/Email for encryption (Init only). | *(Prompts if empty during init)* |
 | `-a` | `--skip-auth` | Force skip the charm authorisation steps (5-8). | `false` |
 | `-S` | `--seal` | (Easter Egg) Invoke a cute Seal after success. | `false` |
@@ -154,7 +151,7 @@ Initialise an application named `vault-ha` with 5 key shares and a threshold of 
 un-seal --charm-name vault-ha -s 5 -t 3 --gpg-id "admin@example.com"
 ```
 
-Unseal a cluster using keys stored on external media:
+Unseal a cluster using keys stored on external media: (requires additional `removable-media` interface connection if using as a snap)
 
 ```bash
 un-seal --creds-dir /media/secure-usb/vault_keys/
@@ -167,7 +164,7 @@ un-seal --creds-dir /media/secure-usb/vault_keys/
 3.  Leader & Version Analysis: Identifies the Juju leader unit and inspects the `charm-channel` to distinguish between Legacy (≤1.8) and Modern (>1.8) architectures.
 4.  Health Check & Auto-Healing:
     * Dependency Check: Verifies the `mysql-router` subordinate status; aborts immediately if the database connection is blocked to prevent indefinite hanging.
-    * Recovery: Detects units in failure states (`hook failed`, `service not running`). If the database is healthy, it executes a remote `systemctl restart vault` or `systemctl restart snap.vault.vaultd` via Juju exec and polls for service recovery.
+    * Recovery: Detects units in failure states (`hook failed`, `service not running`) and corroborates using `systemctl is-active`. If the database is healthy, it executes a remote `systemctl restart vault` or `systemctl restart snap.vault.vaultd` via Juju exec and polls for service recovery.
 5.  CA Retrieval (Modern Only): Retrieves the `self-signed-vault-ca-certificate` secret from Juju to establish a secure TLS connection with the Vault units.
 6.  Protocol Selection: Dynamically sets the Vault address protocol to `http` for Legacy units or `https` for Modern units.
 7.  State Management:
