@@ -2,7 +2,7 @@
 
 # ---
 # un-seal: A helper script to initialize or unseal a Juju-deployed Vault charm.
-# version: 5.2.0 (GPG/YubiKey Edition)
+# version: 5.3.0
 #
 # This script automatically finds the Juju leader unit for the Vault
 # charm.
@@ -32,7 +32,7 @@
 set -euo pipefail
 
 # --- Configuration ---
-SNAP_VERSION=${SNAP_VERSION:-"5.2.0-script"}
+SNAP_VERSION=${SNAP_VERSION:-"5.3.0-script"}
 
 CHARM_NAME="vault" # Default Juju charm name
 KEY_SHARES=3 # Default keys generated
@@ -360,7 +360,7 @@ check_deps() {
     local status_output
     status_output=$($JUJU status --format=json)
 
-    if ! jq -e --arg charm "$CHARM_NAME" '.applications | has($charm)' <<< $status_output > /dev/null 2>&1; then
+    if ! jq -e --arg charm "$CHARM_NAME" '.applications | has($charm)' <<< "$status_output" > /dev/null 2>&1; then
         echo -e "${BRED}Error:${NC} Juju charm ${BRED}'$CHARM_NAME'${NC} not found in the current model." >&2
         echo "       Please check the charm name and your current Juju model." >&2
         exit 1
@@ -425,7 +425,7 @@ check_and_heal_unit() {
 
     # Probe the actual service status. If this command fails (non-zero exit), the service is down.
     local service_is_down=false
-    if ! $JUJU $JUJU_EXEC --unit "$unit_name" -- systemctl is-active --quiet "$VAULT_SERVICE"; then
+    if ! $JUJU $JUJU_EXEC --unit "$unit_name" -- systemctl is-active $VAULT_SERVICE >/dev/null 2>&1; then
         service_is_down=true
     fi
 
@@ -444,7 +444,7 @@ check_and_heal_unit() {
         echo ""
 
         if [ "$service_is_down" == "true" ]; then
-            echo -e "  Detected that '$VAULT_SERVICE' is ${BRED}DOWN${NC} on $unit_name (despite Juju status: '$vault_status')."
+            echo -e "  Detected that '$VAULT_SERVICE' is ${BRED}DOWN${NC} on $unit_name (despite Juju status: '$vault_status - $vault_message')."
         else
             echo -e "  Detected ${BYELLOW}stuck${NC} state on $unit_name ($vault_status - $vault_message)."
         fi
@@ -1004,6 +1004,7 @@ if [ ${#UNIT_ADDRESSES[@]} -eq 0 ]; then
     exit 1
 fi
 
+echo ""
 echo -e "  Found ${BGREEN}${#UNIT_ADDRESSES[@]}${NC} unit(s): ${!UNIT_ADDRESSES[*]}"
 
 if [ -z "$LEADER_UNIT_NAME" ]; then
