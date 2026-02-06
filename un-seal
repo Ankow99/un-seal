@@ -2,14 +2,14 @@
 
 # ---
 # un-seal: A helper script to initialize or unseal a Juju-deployed Vault charm.
-# version: 5.3.0
+# version: 5.4.0
 #
 # This script automatically finds the Juju leader unit for the Vault
 # charm.
 #
 # 1. If Vault is *not* initialized:
 #    - Runs 'vault operator init'.
-#    - Prompts for a GPG ID (--gpg-id) if not provided.
+#    - Prompts for a GPG ID (--gpg-id) if not provided and validates it using gpg --list-keys.
 #    - Saves the new keys and root token to separate GPG-encrypted files in a specified directory. (defaults to $REAL_HOME/${MODEL_NAME}_creds/)
 #    - Uses these new keys to unseal all units.
 #
@@ -32,7 +32,7 @@
 set -euo pipefail
 
 # --- Configuration ---
-SNAP_VERSION=${SNAP_VERSION:-"5.3.0-script"}
+SNAP_VERSION=${SNAP_VERSION:-"5.4.0-script"}
 
 CHARM_NAME="vault" # Default Juju charm name
 KEY_SHARES=3 # Default keys generated
@@ -259,7 +259,8 @@ check_deps() {
         if ! snapctl is-connected juju-bin; then
             echo -e "${BRED}Error:${NC} Snap interface 'juju-bin' is disconnected." >&2
             echo "       Access to Juju binary is required." >&2
-            echo "       Run: sudo snap connect un-seal:juju-bin juju:juju-bin" >&2
+            echo -e "       Run: ${BYELLOW}sudo snap connect un-seal:juju-bin juju:juju-bin${NC}" >&2
+            echo ""
             snap_conn_err=1
         fi
 
@@ -267,7 +268,8 @@ check_deps() {
         if ! snapctl is-connected dot-local-share-juju; then
             echo -e "${BRED}Error:${NC} Snap interface 'dot-local-share-juju' is disconnected." >&2
             echo "       Access to Juju credentials (~/.local/share/juju) is required." >&2
-            echo "       Run: sudo snap connect un-seal:dot-local-share-juju" >&2
+            echo -e "       Run: ${BYELLOW}sudo snap connect un-seal:dot-local-share-juju${NC}" >&2
+            echo ""
             snap_conn_err=1
         fi
 
@@ -275,7 +277,8 @@ check_deps() {
         if ! snapctl is-connected gpg-keys; then
             echo -e "${BRED}Error:${NC} Snap interface 'gpg-keys' is disconnected." >&2
             echo "       Access to host GPG keys is required." >&2
-            echo "       Run: sudo snap connect un-seal:gpg-keys" >&2
+            echo -e "       Run: ${BYELLOW}sudo snap connect un-seal:gpg-keys${NC}" >&2
+            echo ""
             snap_conn_err=1
         fi
 
@@ -283,12 +286,12 @@ check_deps() {
         if ! snapctl is-connected pcscd; then
             echo -e "${BRED}Error:${NC} Snap interface 'pcscd' is disconnected." >&2
             echo "       Access to Smart Cards (YubiKey) is required." >&2
-            echo "       Run: sudo snap connect un-seal:pcscd" >&2
+            echo -e "       Run: ${BYELLOW}sudo snap connect un-seal:pcscd${NC}" >&2
+            echo ""
             snap_conn_err=1
         fi
 
         if [ "$snap_conn_err" -eq 1 ]; then
-            echo ""
             echo -e "${BRED}Aborting due to disconnected Snap interfaces.${NC}" >&2
             exit 1
         fi
