@@ -32,7 +32,7 @@
 set -euo pipefail
 
 # --- Configuration ---
-SNAP_VERSION=${SNAP_VERSION:-"5.5.0-script"}
+SNAP_VERSION=${SNAP_VERSION:-"5.4.1-script"}
 
 CHARM_NAME="vault" # Default Juju charm name
 KEY_SHARES=3 # Default keys generated
