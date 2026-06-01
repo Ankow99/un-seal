@@ -2,7 +2,7 @@
 
 # ---
 # un-seal: A helper script to initialize or unseal a Juju-deployed Vault charm.
-# version: 6.0.0
+# version: 6.0.1
 #
 # This script automatically finds the Juju leader unit for the Vault
 # charm.
@@ -32,7 +32,7 @@
 set -euo pipefail
 
 # --- Configuration ---
-SNAP_VERSION=${SNAP_VERSION:-"6.0.0-script"}
+SNAP_VERSION=${SNAP_VERSION:-"6.0.1-script"}
 
 CHARM_NAME="vault" # Default Juju charm name
 JUJU_MODEL=""
@@ -290,11 +290,11 @@ check_deps() {
 
         # Check pcscd interface
         if ! snapctl is-connected pcscd; then
-            echo -e "${BRED}Error:${NC} Snap interface 'pcscd' is disconnected." >&2
-            echo "       Access to Smart Cards (YubiKey) is required." >&2
-            echo -e "       Run: ${BYELLOW}sudo snap connect un-seal:pcscd${NC}" >&2
+            echo -e "${BYELLOW}Warning:${NC} Snap interface 'pcscd' is disconnected. Smart Cards (YubiKey) are disabled." >&2
+            echo "         If you only use standard GPG keys, you can safely ignore this." >&2
+            echo -e "         To enable them, run: ${BYELLOW}sudo snap connect un-seal:pcscd${NC}" >&2
             echo ""
-            snap_conn_err=1
+            #snap_conn_err=1 # Just warn and move on
         fi
 
         if [ "$snap_conn_err" -eq 1 ]; then
@@ -340,10 +340,10 @@ check_deps() {
     fi
     
     if [ -n "$JUJU_MODEL" ]; then
-        JUJU_BASE_CMD="$JUJU -m $JUJU_MODEL"
-        echo "  Targeting Juju model: $JUJU_MODEL"
+        JUJU_MODEL_FLAG="-m $JUJU_MODEL"
+        echo -e "  Targeting Juju model: ${BGREEN}'$JUJU_MODEL'${NC}"
     else
-        JUJU_BASE_CMD="$JUJU"
+        JUJU_MODEL_FLAG=""
     fi
     
     if ! jq --version > /dev/null 2>&1; then
@@ -374,7 +374,7 @@ check_deps() {
     echo -e "  Verifying Juju charm ${BGREEN}'$CHARM_NAME'${NC} exists..."
 
     local status_output
-    status_output=$($JUJU_BASE_CMD status --format=json)
+    status_output=$($JUJU status $JUJU_MODEL_FLAG --format=json)
 
     if ! jq -e --arg charm "$CHARM_NAME" '.applications | has($charm)' <<< "$status_output" > /dev/null 2>&1; then
         echo -e "${BRED}Error:${NC} Juju charm ${BRED}'$CHARM_NAME'${NC} not found in the current model." >&2
@@ -456,7 +456,7 @@ check_and_heal_unit() {
 
     # Probe the actual service status. If this command fails (non-zero exit), the service is down.
     local service_is_down=false
-    if ! $JUJU_BASE_CMD $JUJU_EXEC --unit "$unit_name" -- systemctl is-active $VAULT_SERVICE >/dev/null 2>&1; then
+    if ! $JUJU $JUJU_EXEC $JUJU_MODEL_FLAG --unit "$unit_name" -- systemctl is-active $VAULT_SERVICE >/dev/null 2>&1; then
         service_is_down=true
     fi
 
@@ -473,11 +473,11 @@ check_and_heal_unit() {
         echo -e "    Database connection appears OK (or N/A). Attempting to restart '$VAULT_SERVICE'..."
         
         # Run systemctl restart via Juju.
-        if $JUJU_BASE_CMD $JUJU_EXEC --unit "$unit_name" -- sudo systemctl restart "$VAULT_SERVICE"; then
+        if $JUJU $JUJU_EXEC $JUJU_MODEL_FLAG --unit "$unit_name" -- sudo systemctl restart "$VAULT_SERVICE"; then
             local attempt
             for (( attempt=1; attempt<=MAX_WAIT_ATTEMPTS; attempt++ )); do
                 # Check service via exec.
-                if $JUJU_BASE_CMD $JUJU_EXEC --unit "$unit_name" -- systemctl is-active $VAULT_SERVICE >/dev/null 2>&1; then
+                if $JUJU $JUJU_EXEC $JUJU_MODEL_FLAG --unit "$unit_name" -- systemctl is-active $VAULT_SERVICE >/dev/null 2>&1; then
                     printf '\r    %bService restarted.%b\n' "${BGREEN}" "${NC}"
                     return 0 # Success.
                 fi
@@ -985,7 +985,7 @@ echo -e "${BCYAN}-> 1.${NC} Finding Vault units and leader for charm '$CHARM_NAM
 echo ""
 echo "  Parsing unit information..."
 
-VAULT_STATUS_JSON=$($JUJU_BASE_CMD status --format=json)
+VAULT_STATUS_JSON=$($JUJU status $JUJU_MODEL_FLAG --format=json)
 LEADER_UNIT_NAME=""
 
 # Check vault charm version.
@@ -1065,14 +1065,14 @@ else
     # Modern mode.
     echo -e "${BCYAN}-> 2.${NC} Fetching Vault CA certificate..."
     echo ""
-    CERT_SECRET_ID=$($JUJU_BASE_CMD secrets --format=json | jq -r --arg charm "$CHARM_NAME" 'to_entries[] | select(.value.label == "self-signed-vault-ca-certificate" and .value.owner == $charm) | .key')
+    CERT_SECRET_ID=$($JUJU secrets $JUJU_MODEL_FLAG --format=json | jq -r --arg charm "$CHARM_NAME" 'to_entries[] | select(.value.label == "self-signed-vault-ca-certificate" and .value.owner == $charm) | .key')
 
     if [ -z "$CERT_SECRET_ID" ] || [ "$CERT_SECRET_ID" == "null" ]; then
         echo -e "${BRED}Error:${NC} Could not find Juju secret with label 'self-signed-vault-ca-certificate'." >&2
         exit 1
     fi
 
-    $JUJU_BASE_CMD show-secret "$CERT_SECRET_ID" --reveal --format=json | jq -r '.[].content.Data.certificate' > "$VAULT_CERT_FILE"
+    $JUJU show-secret $JUJU_MODEL_FLAG "$CERT_SECRET_ID" --reveal --format=json | jq -r '.[].content.Data.certificate' > "$VAULT_CERT_FILE"
     echo "  Created temporary CA file: $VAULT_CERT_FILE"
 
     export VAULT_CAPATH="$VAULT_CERT_FILE"
@@ -1273,7 +1273,7 @@ if [ "$CHARM_ALREADY_AUTHORIZED" == "false" ]; then
     echo ""
 
     # Pass the token and capture the full secret ID.
-    VAULT_SECRET_ID=$($JUJU_BASE_CMD add-secret one-time-token token="$VAULT_TOKEN")
+    VAULT_SECRET_ID=$($JUJU add-secret $JUJU_MODEL_FLAG one-time-token token="$VAULT_TOKEN")
 
     # Check that the command succeeded and returned a valid ID.
     if ! [[ "$VAULT_SECRET_ID" == secret:* ]]; then
@@ -1286,7 +1286,7 @@ if [ "$CHARM_ALREADY_AUTHORIZED" == "false" ]; then
     echo -e "${BCYAN}-> 6.${NC} Granting secret to '$CHARM_NAME'"
     echo ""
     # Grant secret to the charm-name charm.
-    $JUJU_BASE_CMD grant-secret one-time-token "$CHARM_NAME"
+    $JUJU grant-secret $JUJU_MODEL_FLAG one-time-token "$CHARM_NAME"
 
     echo -e "${BCYAN}-> 7.${NC} Running 'authorize-charm' action on charm leader ($LEADER_UNIT_NAME)"
     echo ""
@@ -1295,10 +1295,10 @@ if [ "$CHARM_ALREADY_AUTHORIZED" == "false" ]; then
 
     if [ "$LEGACY_VAULT" == "true" ]; then
         # Run the action, tee-ing the output to the terminal (tty) and also capturing it to a variable for parsing.
-        auth_output=$($JUJU_BASE_CMD $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" authorize-charm token="$VAULT_TOKEN" 2>&1 | tee /dev/tty) || juju_exit_code=$?
+        auth_output=$($JUJU $JUJU_RUN $JUJU_MODEL_FLAG --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" authorize-charm token="$VAULT_TOKEN" 2>&1 | tee /dev/tty) || juju_exit_code=$?
     else
         # Run the action, tee-ing the output to the terminal (tty) and also capturing it to a variable for parsing.
-        auth_output=$($JUJU_BASE_CMD $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" authorize-charm secret-id="${VAULT_SECRET_ID#secret:}" 2>&1 | tee /dev/tty) || juju_exit_code=$?
+        auth_output=$($JUJU $JUJU_RUN $JUJU_MODEL_FLAG --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" authorize-charm secret-id="${VAULT_SECRET_ID#secret:}" 2>&1 | tee /dev/tty) || juju_exit_code=$?
     fi
    
     # Check for a "failed" message first (case-insensitive).
@@ -1328,7 +1328,7 @@ if [ "$CHARM_ALREADY_AUTHORIZED" == "false" ]; then
     echo -e "${BCYAN}-> 8.${NC} Cleaning up one-time Juju secret"
     echo ""
     # Remove the secret.
-    $JUJU_BASE_CMD remove-secret "$VAULT_SECRET_ID"
+    $JUJU remove-secret $JUJU_MODEL_FLAG "$VAULT_SECRET_ID"
 
 else
     echo -e "${BCYAN}-> 5-8.${NC} Charm is already ${BGREEN}authorized${NC}. Skipping token authorization steps."
@@ -1345,7 +1345,7 @@ if [ "$LEGACY_VAULT" == "true" ]; then
     juju_exit_code=0
     
     # Run the action, tee-ing the output to the terminal (tty) and also capturing it to a variable for parsing.
-    ca_output=$($JUJU_BASE_CMD $JUJU_RUN --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" generate-root-ca 2>&1 | tee /dev/tty) || juju_exit_code=$?
+    ca_output=$($JUJU $JUJU_RUN $JUJU_MODEL_FLAG --wait="${TIMEOUT_MINUTES}m" "$LEADER_UNIT_NAME" generate-root-ca 2>&1 | tee /dev/tty) || juju_exit_code=$?
  
     # Check for a "already configured" message first (case-insensitive).
     if grep -q -i "already configured" <<< "$ca_output"; then
