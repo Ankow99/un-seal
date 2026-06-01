@@ -1,0 +1,36 @@
+name: Cut GitHub Release
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  github_release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract Snap Version
+        run: |
+          VERSION=$(grep -E '^version:' snap/snapcraft.yaml | awk '{print $2}' | tr -d "'\"")
+          echo "SNAP_VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Build snap
+        uses: snapcore/action-build@v1
+        id: snapcraft
+
+      # Automatically creates the release and uploads the .snap file
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: v${{ env.SNAP_VERSION }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true # Automatically compiles PRs and commits as release notes
+          files: ${{ steps.snapcraft.outputs.snap }}
