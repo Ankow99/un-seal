@@ -1,0 +1,40 @@
+name: Build snap
+on:
+  - push
+  - pull_request
+  - workflow_dispatch
+
+jobs:
+  snap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build snap
+        uses: snapcore/action-build@v1
+        id: snapcraft
+
+      - name: Install snap
+        run: |
+          sudo snap install --dangerous ${{ steps.snapcraft.outputs.snap }}
+
+      - name: Run snap (Functional test - Help Output)
+        run: |
+          # Verifies the binary executes and bundles correctly by checking help output
+          un-seal --help
+
+      - name: Upload snap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: un-seal-snap
+          path: ${{ steps.snapcraft.outputs.snap }}
+
+      - name: Upload snapcraft logs
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: snapcraft-logs
+          path: /home/runner/.cache/snapcraft/log/*.log
