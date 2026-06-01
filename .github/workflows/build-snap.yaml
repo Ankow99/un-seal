@@ -29,12 +29,12 @@ jobs:
       - name: Upload snap artifact
         uses: actions/upload-artifact@v4
         with:
-          name: un-seal-snap
+          name: un-seal_${{ env.SNAP_VERSION }}
           path: ${{ steps.snapcraft.outputs.snap }}
 
       - name: Upload snapcraft logs
         uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: snapcraft-logs
+          name: snapcraft-logs_${{ env.SNAP_VERSION }}
           path: /home/runner/.cache/snapcraft/log/*.log

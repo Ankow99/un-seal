@@ -1,0 +1,43 @@
+name: Build and publish Snap
+on:
+  workflow_run:
+    workflows: [Build snap]
+    branches: [main]
+    types: [completed]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  publish:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract Snap Version
+        id: get_version
+        run: |
+          VERSION=$(grep -E '^version:' snap/snapcraft.yaml | awk '{print $2}' | tr -d "'\"")
+          echo "SNAP_VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Build snap
+        uses: snapcore/action-build@v1
+        id: snapcraft
+
+      - name: Upload snap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: un-seal_${{ env.SNAP_VERSION }}
+          path: ${{ steps.snapcraft.outputs.snap }}
+
+      - name: Publish to Snap Store (Edge Channel)
+        uses: canonical/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.STORE_LOGIN }}
+        with:
+          snap: ${{ steps.snapcraft.outputs.snap }}
+          release: edge
