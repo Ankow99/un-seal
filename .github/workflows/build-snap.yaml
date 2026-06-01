@@ -13,6 +13,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Extract Snap Version
+        id: get_version
+        run: |
+          VERSION=$(grep -E '^version:' snap/snapcraft.yaml | awk '{print $2}' | tr -d "'\"")
+          echo "SNAP_VERSION=$VERSION" >> $GITHUB_ENV
+
       - name: Build snap
         uses: snapcore/action-build@v1
         id: snapcraft
