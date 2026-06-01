@@ -1,4 +1,4 @@
-name: Cut GitHub Release
+name: Create GitHub release and publish to stable
 on:
   push:
     tags:
@@ -34,3 +34,11 @@ jobs:
           prerelease: false
           generate_release_notes: true # Automatically compiles PRs and commits as release notes
           files: ${{ steps.snapcraft.outputs.snap }}
+
+      - name: Publish to Snap Store (Stable Channel)
+        uses: canonical/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.STORE_LOGIN }}
+        with:
+          snap: ${{ steps.snapcraft.outputs.snap }}
+          release: stable
