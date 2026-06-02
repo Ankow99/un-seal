@@ -173,7 +173,7 @@ Example:
   $(basename "$0")
 
   # Initialize and unseal a Sunbeam Vault deployment
-  $(basename "$0") --model openstack --charm-name vault-k8s
+  $(basename "$0") --model openstack
 EOF
 }
 
@@ -408,6 +408,28 @@ check_deps() {
     echo ""
 }
 
+# Function to execute Vault CLI commands (handles K8s network isolation)
+run_vault() {
+    local target_unit="$1"
+    shift
+    local cmd=("$@")
+
+    # Safely rebuild the command array into a string for bash -c
+    local cmd_str=""
+    for arg in "$@"; do
+        cmd_str+=" '$arg'"
+    done
+
+    if $JUJU $JUJU_EXEC $JUJU_MODEL_FLAG --unit "$target_unit" -- command -v pebble >/dev/null 2>&1; then
+        # Kubernetes: Execute directly inside the vault pebble
+        local vault_cmd="env PEBBLE_SOCKET=/charm/containers/vault/pebble.socket pebble exec --env VAULT_ADDR='https://127.0.0.1:8200' --env VAULT_SKIP_VERIFY=true -- vault$cmd_str"
+        $JUJU $JUJU_EXEC $JUJU_MODEL_FLAG --unit "$target_unit" -- bash -c "$vault_cmd || true" 2>&1 | tr -d '\r'
+    else
+        # Machine: Execute locally using host's vault binary, respecting exported VAULT_ADDR
+        vault "${cmd[@]}" 2>&1 | tr -d '\r'
+    fi
+}
+
 # Check unit health (mysql and restart logic) - check_and_heal_unit(unit_name)
 check_and_heal_unit() {
     local unit_name="$1"
@@ -452,6 +474,11 @@ check_and_heal_unit() {
     local is_juju_stuck=false
     if [[ "$hook_failed" == "true" || "$legacy_vault_stuck" == "true" || "$modern_vault_stuck" == "true" ]]; then
         is_juju_stuck=true
+    fi
+
+    # Check if systemctl exists. If not, this is likely a Kubernetes deployment (Sunbeam), skip...
+    if ! $JUJU $JUJU_EXEC $JUJU_MODEL_FLAG --unit "$unit_name" -- command -v systemctl >/dev/null 2>&1; then
+        return 0
     fi
 
     # Probe the actual service status. If this command fails (non-zero exit), the service is down.
@@ -810,7 +837,7 @@ unseal_unit() {
     # 1. Wait for the unit to be initialized.
     echo "    Waiting for unit to report as initialized..."
     for (( attempt=1; attempt<=MAX_WAIT_ATTEMPTS; attempt++ )); do
-        status_json=$(vault status -format=json 2>/dev/null || true)
+        status_json=$(run_vault "$unit_name" status -format=json 2>/dev/null || true)
         if [ -n "$status_json" ] && [ "$(jq -r '.initialized' <<< "$status_json")" == "true" ]; then
             printf '\r    Unit is %binitialized%b.                          \n' "${BGREEN}" "${NC}"
             initialized=true
@@ -836,7 +863,7 @@ unseal_unit() {
     # 3. Unit is initialized but sealed, submit the correct number of keys.
     for (( i=0; i<KEY_THRESHOLD; i++ )); do
         echo "    Submitting Unseal Key $((i+1)) to '$unit_name'..."
-        unseal_status=$(vault operator unseal -format=json "${UNSEAL_KEYS[$i]}")
+        unseal_status=$(run_vault "$unit_name" operator unseal -format=json "${UNSEAL_KEYS[$i]}")
         
         # Check for errors.
         if ! jq -e . > /dev/null 2>&1 <<< "$unseal_status"; then
@@ -862,7 +889,7 @@ unseal_unit() {
     # 4. Verify the unseal.
     echo "    Verifying unseal status..."
     for (( attempt=1; attempt<=MAX_WAIT_ATTEMPTS; attempt++ )); do
-        verify_status=$(vault status -format=json 2>/dev/null || true)
+        verify_status=$(run_vault "$unit_name" status -format=json 2>/dev/null || true)
         if jq -r '.sealed' <<< "$verify_status" | grep -q 'false'; then
             printf '\r    Unit %s is now %bunsealed.%b          \n' "$unit_name" "${BGREEN}" "${NC}"
             unsealed=true
@@ -1021,7 +1048,7 @@ while IFS=" " read -r unit_name public_address is_leader; do
         # Check and heal possible vault restart errors (Arif Ali's suggestion).
         check_and_heal_unit "$unit_name"
     fi
-done < <(jq -r --arg charm "$CHARM_NAME" '.applications[$charm].units | to_entries[] | "\(.key) \(.value."public-address") \(.value.leader)"' <<< "$VAULT_STATUS_JSON")
+done < <(jq -r --arg charm "$CHARM_NAME" '.applications[$charm].units | to_entries[] | "\(.key) \(.value.address // .value."public-address") \(.value.leader)"' <<< "$VAULT_STATUS_JSON")
 
 if [ ${#UNIT_ADDRESSES[@]} -eq 0 ]; then
     echo ""
@@ -1085,7 +1112,7 @@ echo ""
 echo -e "${BCYAN}-> 3.${NC} Initializing Vault (targeting leader $LEADER_UNIT_NAME)..."
 echo ""
 
-CURRENT_STATUS=$(vault status -format=json 2>/dev/null || true)
+CURRENT_STATUS=$(run_vault "$LEADER_UNIT_NAME" status -format=json 2>/dev/null || true)
 IS_INITIALIZED=$(jq -r '.initialized' <<< "$CURRENT_STATUS" 2>/dev/null || echo "false")
 
 # First, check if the vault is already initialized.
@@ -1182,7 +1209,7 @@ else
     done
 
     echo "  Running 'vault operator init'..."
-    init_output=$(vault operator init -key-shares="$KEY_SHARES" -key-threshold="$KEY_THRESHOLD" -format=json 2>&1 || true)
+    init_output=$(run_vault "$LEADER_UNIT_NAME" operator init -key-shares="$KEY_SHARES" -key-threshold="$KEY_THRESHOLD" -format=json 2>&1 || true)
     
     # Check for failure (invalid JSON).
     if ! jq -e . > /dev/null 2>&1 <<< "$init_output"; then
