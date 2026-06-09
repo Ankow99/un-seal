@@ -2,7 +2,7 @@
 
 # ---
 # un-seal: A helper script to initialize or unseal a Juju-deployed Vault charm.
-# version: 6.0.1
+# version: 6.0.2
 #
 # This script automatically finds the Juju leader unit for the Vault
 # charm.
@@ -32,7 +32,7 @@
 set -euo pipefail
 
 # --- Configuration ---
-SNAP_VERSION=${SNAP_VERSION:-"6.0.1-script"}
+SNAP_VERSION=${SNAP_VERSION:-"6.0.2-script"}
 
 CHARM_NAME="vault" # Default Juju charm name
 JUJU_MODEL=""

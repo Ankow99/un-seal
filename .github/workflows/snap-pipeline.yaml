@@ -1,0 +1,80 @@
+name: Snap CI/CD Pipeline
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'snap/snapcraft.yaml'
+      - 'un-seal'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'snap/snapcraft.yaml'
+      - 'un-seal'
+  workflow_dispatch:
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract Snap Version
+        run: |
+          VERSION=$(grep -E '^version:' snap/snapcraft.yaml | awk '{print $2}' | tr -d "'\"")
+          echo "SNAP_VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Build snap
+        uses: snapcore/action-build@v1
+        id: snapcraft
+
+      - name: Install snap
+        run: |
+          sudo snap install --dangerous ${{ steps.snapcraft.outputs.snap }}
+
+      - name: Run snap (Functional test - Help Output)
+        run: |
+          un-seal --help
+
+      - name: Upload snap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: un-seal_${{ env.SNAP_VERSION }}
+          path: ${{ steps.snapcraft.outputs.snap }}
+
+      - name: Upload snapcraft logs
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: snapcraft-logs_${{ env.SNAP_VERSION }}
+          path: /home/runner/.cache/snapcraft/log/*.log
+
+  publish_edge:
+    needs: build_and_test
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract Snap Version
+        run: |
+          VERSION=$(grep -E '^version:' snap/snapcraft.yaml | awk '{print $2}' | tr -d "'\"")
+          echo "SNAP_VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Download built snap artifact
+        uses: actions/downloads-artifact@v4
+        with:
+          name: un-seal_${{ env.SNAP_VERSION }}
+
+      - name: Publish to Snap Store (Edge Channel)
+        uses: canonical/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.STORE_LOGIN }}
+        with:
+          snap: "*.snap"
+          release: edge

@@ -1,6 +1,6 @@
 name: un-seal
-base: core22
-version: '6.0.1'
+base: core24
+version: '6.0.2'
 
 title: un-seal
 license: GPL-3.0-only
@@ -9,10 +9,11 @@ contact: pablo.degreiff@canonical.com
 summary: Tool to initialize and unseal a Juju-deployed Vault cluster.
 description: |
   Automates the initialization or unsealing of a Juju-deployed Vault cluster.
-  It handles leader-finding, unsealing all units, and automatically
-  authorizing the Juju charm.
+  It natively supports both Juju Machine and Juju Kubernetes deployments 
+  (such as Canonical Sunbeam), managing leader-finding, unsealing all units,
+  and automatically authorizing the Juju charm.
 
-  This tool securely manages credentials by storing the root token and each
+  It securely manages credentials by storing the root token and each
   unseal key in separate GPG-encrypted files, enabling hardware-backed
   security (YubiKey) and separation of duties.
 
@@ -32,9 +33,10 @@ description: |
 
      sudo snap connect un-seal:dot-local-share-juju
      sudo snap connect un-seal:gpg-keys
-     sudo snap connect un-seal:pcscd
+     sudo snap connect un-seal:pcscd #[optional]
 
   Source code: https://github.com/Ankow99/un-seal
+  
 
 website: https://github.com/Ankow99/un-seal
 issues: https://github.com/Ankow99/un-seal/issues
@@ -105,7 +107,7 @@ parts:
       - libccid
       - libusb-1.0-0
       - libgnutls30
-      - libldap-2.5-0
+      - libldap2
       - libksba8
       - libnpth0
 
