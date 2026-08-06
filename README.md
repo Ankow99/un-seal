@@ -188,6 +188,10 @@ un-seal --creds-dir /media/secure-usb/vault_keys/
 10. Post-Unseal Configuration (Legacy Only): If a Legacy version is detected, executes the `generate-root-ca` action on the leader immediately after authorisation.
 11. Cleanup: Securely shreds temporary files created during execution. The encrypted credential files are preserved for backup purposes.
 
+## UML of Execution Flow
+
+![un-seal Execution Flow Diagram](un-seal-uml.svg)
+
 ## License
 
 This project is licensed under the GPL-3.0-only license. See the `LICENSE` file for details.
