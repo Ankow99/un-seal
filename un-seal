@@ -24,6 +24,8 @@
 #
 # Made by: Pablo Gonzalez De Greiff @ Canonical
 # ---
+# JUJU_MODEL_FLAG relies on word splitting ("-m model" or empty)
+# shellcheck disable=SC2086
 
 # Exit immediately if a command exits with a non-zero status.
 # Treat unset variables as an error.
@@ -838,7 +840,7 @@ unseal_unit() {
     echo "    Waiting for unit to report as initialized..."
     for (( attempt=1; attempt<=MAX_WAIT_ATTEMPTS; attempt++ )); do
         status_json=$(run_vault "$unit_name" status -format=json 2>/dev/null || true)
-        if [ -n "$status_json" ] && [ "$(jq -r '.initialized' <<< "$status_json")" == "true" ]; then
+        if [ -n "$status_json" ] && [ "$(jq -r '.initialized' 2>/dev/null <<< "$status_json")" == "true" ]; then
             printf '\r    Unit is %binitialized%b.                          \n' "${BGREEN}" "${NC}"
             initialized=true
             break
@@ -888,13 +890,25 @@ unseal_unit() {
 
     # 4. Verify the unseal.
     echo "    Verifying unseal status..."
+    local last_error=""
     for (( attempt=1; attempt<=MAX_WAIT_ATTEMPTS; attempt++ )); do
         verify_status=$(run_vault "$unit_name" status -format=json 2>/dev/null || true)
-        if jq -r '.sealed' <<< "$verify_status" | grep -q 'false'; then
-            printf '\r    Unit %s is now %bunsealed.%b          \n' "$unit_name" "${BGREEN}" "${NC}"
-            unsealed=true
-            break
+
+        # Only parse if the response is valid JSON (same guard as the unseal step above).
+        if jq -e . > /dev/null 2>&1 <<< "$verify_status"; then
+            if jq -r '.sealed' <<< "$verify_status" | grep -q 'false'; then
+                printf '\r    Unit %s is now %bunsealed.%b          \n' "$unit_name" "${BGREEN}" "${NC}"
+                unsealed=true
+                break
+            fi
+        elif [ "$verify_status" != "$last_error" ]; then
+            # Not JSON: the unit's API is not answering properly. Show the raw
+            # error once per distinct message instead of letting jq spam parse errors.
+            printf '\n'
+            echo -e "    ${BYELLOW}Warning:${NC} Unit '$unit_name' status check did not return valid JSON (API may be down)." >&2
+            echo "             Raw output: ${verify_status:-<no output>}" >&2
         fi
+        last_error="$verify_status"
         printf '\r    Verifying unseal status... (attempt %s/%s)' "$attempt" "$MAX_WAIT_ATTEMPTS"
         sleep 3
     done
@@ -904,6 +918,9 @@ unseal_unit() {
         printf "\n"
         echo -e "  ${BYELLOW}Warning:${NC} Failed to verify unseal for unit '$unit_name' after submitting keys." >&2
         echo "           Please check the unit's logs or if keys are correct." >&2
+        if [ -n "$last_error" ]; then
+            echo "           Last raw response from unit: $last_error" >&2
+        fi
         return 1 # Failure.
     fi
     
