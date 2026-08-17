@@ -23,6 +23,7 @@
 # on the leader unit.
 #
 # Made by: Pablo Gonzalez De Greiff @ Canonical
+# Contributors: David A. Desroriers @ Canonical
 # ---
 
 # JUJU_MODEL_FLAG relies on word splitting ("-m model" or empty)
