@@ -27,6 +27,45 @@ jobs:
         uses: snapcore/action-build@v1
         id: snapcraft
 
+      - name: Verify Version Consistency
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SCRIPT_VERSION=$(grep -m1 "^# version:" un-seal | awk '{print $3}')
+          
+          if [ -z "$SCRIPT_VERSION" ]; then
+            echo "Error: Could not find '# version: X.X.X' in the un-seal script."
+            exit 1
+          fi
+          
+          echo "Git Tag: ${{ github.ref_name }}"
+          echo "Snapcraft Version: ${{ env.SNAP_VERSION }}"
+          echo "Script Version: $SCRIPT_VERSION"
+          
+          # Extra Tag Check: Prevents pushing a v6.0.4 tag when files still say 6.0.3
+          if [ "v${{ env.SNAP_VERSION }}" != "${{ github.ref_name }}" ]; then
+            echo "Error: Tag mismatch! The tag (${{ github.ref_name }}) does not match the file version (v${{ env.SNAP_VERSION }})."
+            exit 1
+          fi
+
+          if [ "${{ env.SNAP_VERSION }}" != "$SCRIPT_VERSION" ]; then
+            echo "Error: Version mismatch! snapcraft.yaml (${{ env.SNAP_VERSION }}) vs un-seal script ($SCRIPT_VERSION)"
+            exit 1
+          fi
+          
+          LATEST_TAG=$(gh release view --json tagName -q ".tagName" 2>/dev/null || echo "v0.0.0")
+          LATEST_VERSION=${LATEST_TAG#v}
+          
+          echo "Latest GitHub Release: $LATEST_VERSION"
+          
+          if dpkg --compare-versions "${{ env.SNAP_VERSION }}" le "$LATEST_VERSION"; then
+            echo "Error: Current version (${{ env.SNAP_VERSION }}) is not newer than the latest release ($LATEST_VERSION)."
+            echo "Did you forget to bump the version?"
+            exit 1
+          fi
+          
+          echo "Version check passed!"
+
       # Automatically creates the release and uploads the .snap file
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
