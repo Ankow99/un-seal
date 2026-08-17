@@ -69,15 +69,29 @@ jobs:
           VERSION=$(grep -E '^version:' snap/snapcraft.yaml | awk '{print $2}' | tr -d "'\"")
           echo "SNAP_VERSION=$VERSION" >> $GITHUB_ENV
 
-      - name: Download built snap artifact
+      - name: Download Built Snap Artifact
         uses: actions/download-artifact@v4
         with:
           name: un-seal_${{ env.SNAP_VERSION }}
+
+      - name: Find Downloaded Snap File
+        run: |
+          # Specifically look for a .snap file matching the current version
+          # e.g., un-seal_6.0.3_amd64.snap
+          SNAP_FILE=$(ls *_${{ env.SNAP_VERSION }}_*.snap | head -n 1)
+          
+          if [ -z "$SNAP_FILE" ]; then
+            echo "Error: Could not find the downloaded .snap file matching version ${{ env.SNAP_VERSION }}."
+            exit 1
+          fi
+          
+          echo "Found snap file: $SNAP_FILE"
+          echo "SNAP_FILE=$SNAP_FILE" >> $GITHUB_ENV
 
       - name: Publish to Snap Store (Edge Channel)
         uses: canonical/action-publish@v1
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.STORE_LOGIN }}
         with:
-          snap: ${{ needs.build_and_test.outputs.snap_file }}
+          snap: ${{ env.SNAP_FILE }}
           release: edge
