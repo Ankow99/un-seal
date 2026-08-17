@@ -79,5 +79,5 @@ jobs:
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.STORE_LOGIN }}
         with:
-          snap: "*.snap"
+          snap: ${{ needs.build_and_test.outputs.snap_file }}
           release: edge
