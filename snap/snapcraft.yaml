@@ -1,6 +1,6 @@
 name: un-seal
 base: core24
-version: '6.0.2'
+version: '6.0.3'
 
 title: un-seal
 license: GPL-3.0-only
